@@ -1,0 +1,4 @@
+name: rootfs
+description: Build the buildroot root filesystem (+ post-build customization)
+needs: [kernel]
+run: run.sh

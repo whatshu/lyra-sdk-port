@@ -1,0 +1,31 @@
+# Build work directory (full builds overwrite each other)
+/out/
+
+# Release artifacts live on disk, not in git
+/RELEASE/
+
+# Downloads / caches
+/cache/
+/tools/dl/
+/tools/nix/cache/
+/tools/docker/context/
+
+# Vendor submodule work trees build in-place; never commit their artifacts
+/vendor/rockchip/*/.config
+/vendor/rockchip/*/output/
+/vendor/rockchip/*/dl/
+/vendor/rockchip/kernel/*.img
+/vendor/rockchip/kernel/vmlinux*
+/vendor/rockchip/kernel/.tmp*
+/vendor/rockchip/kernel/modules.order
+/vendor/rockchip/u-boot/*.img
+/vendor/rockchip/u-boot/*_loader_*.bin
+/vendor/rockchip/u-boot/*idblock*.img
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor / OS
+*.swp
+.DS_Store

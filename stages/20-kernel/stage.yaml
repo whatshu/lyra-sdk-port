@@ -1,0 +1,7 @@
+name: kernel
+description: Build Linux kernel, dtb, resource.img and boot image
+needs: []
+run: run.sh
+config:
+  source: product/platform/configs/kernel
+  dest: vendor/rockchip/kernel/arch/arm/configs

@@ -1,0 +1,4 @@
+name: firmware
+description: Assemble the flashable firmware set (images + update.img)
+needs: [uboot, kernel, rootfs]
+run: run.sh
