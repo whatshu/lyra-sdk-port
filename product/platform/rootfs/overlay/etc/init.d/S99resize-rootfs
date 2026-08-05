@@ -1,0 +1,10 @@
+#!/bin/sh
+# S99resize-rootfs — expand the root filesystem to fill its partition.
+# resize2fs on an already-correct filesystem is a fast no-op, so this is
+# safe to run on every boot; it only grows on first boot after flashing.
+
+ROOT_DEV=$(awk '$2 == "/" && $1 ~ /^\/dev\// {print $1}' /proc/mounts | head -1)
+[ -n "$ROOT_DEV" ] && [ -b "$ROOT_DEV" ] || exit 0
+
+resize2fs "$ROOT_DEV" >/dev/null 2>&1
+exit 0
