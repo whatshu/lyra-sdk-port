@@ -9,6 +9,7 @@ RELEASE/index.xml so CI can discover and archive them.
 from __future__ import annotations
 
 import shutil
+import subprocess
 import time
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -59,7 +60,16 @@ def make_release_dir(ctx, artifacts: list[Path]) -> Path:
         shutil.copy2(a, dst)
         copied.append(dst)
 
-    # sha256 sums
+    # xz-compress every image so releases are cheap to transfer/archive
+    notice("compressing release images with xz ...")
+    for p in list(copied):
+        xz = fw_dir / f"{p.name}.xz"
+        subprocess.run(["xz", "-T0", "-6", "-k", str(p), "-c"],
+                       stdout=open(xz, "wb"), check=True)
+        copied.append(xz)
+    info(f"compressed {len(copied) - len(artifacts)} images to .xz")
+
+    # sha256 sums (includes the .xz copies)
     sums = "\n".join(f"{file_sha256(p)}  {p.name}"
                      for p in sorted(copied)) + "\n"
     (fw_dir / "sha256sums.txt").write_text(sums)
