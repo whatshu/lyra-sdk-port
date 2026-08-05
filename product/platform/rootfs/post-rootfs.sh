@@ -108,4 +108,16 @@ if [ -f "$TARGET_DIR/etc/ld.so.conf" ] && \
     fi
 fi
 
+# ---------------------------------------------------------------------------
+# 7. Publish the (modified) target for the RK image step.
+# The Rockchip buildroot generates rootfs images from
+# $(TOPDIR)/../output/buildroot/target, i.e. vendor/rockchip/output/buildroot
+# (a link to out/), so copy the post-processed target there.
+# ---------------------------------------------------------------------------
+EXTRA_TARGET_DIR="$SDK_ROOT/vendor/rockchip/output/buildroot/target"
+msg "publishing target to $EXTRA_TARGET_DIR"
+rm -rf "$EXTRA_TARGET_DIR"
+mkdir -p "$(dirname "$EXTRA_TARGET_DIR")"
+cp -a "$TARGET_DIR" "$EXTRA_TARGET_DIR"
+
 msg "done"
