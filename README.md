@@ -126,14 +126,21 @@ make clean                             # drop out/
 
 ## Recovering the device
 
-If a flashed system fails to boot:
+The loader always ships with the Rockchip USB download function
+(`CONFIG_USB_GADGET_DOWNLOAD`), and the kernel carries the reboot-reason
+driver, so there is always a *software* way back into the flashable
+loader mode — no pins, no buttons:
 
-1. Hold the **BOOT** key and power on → the board stays in loader mode (USB download).
-2. `make flash` writes a known-good `update.img`.
+- **System is booting** → `adb reboot loader` (or `reboot loader` on the
+  serial console) reboots straight into loader mode; then `make flash`.
+- **System won't boot, loader intact** → power-cycle; u-boot falls back to
+  loader/download mode, or hold **BOOT** on power-up for maskrom.
+- **Worst case** → hold **BOOT** on power-up → maskrom (deepest recovery);
+  `make flash` still works because maskrom accepts a fresh loader.
 
-If a system *is* booting but you want to re-flash, the running bootloader can be asked
-to reboot into loader mode (`upgrade_tool rd`) without touching the board.  The loader
-is never overwritten by a failed rootfs, so this always works.
+`make flash` always writes `MiniLoaderAll.bin` + `update.img`, so even a
+bad rootfs flash leaves a re-flashable board.  The loader is never
+overwritten by a failed rootfs.
 
 See `doc/` for details on the build stages, the release manifest schema and the
 container/nix toolchain.
