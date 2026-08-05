@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 #
 # shu-sdk build container (nix host-toolchain variant).
 #
