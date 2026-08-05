@@ -28,6 +28,16 @@ ENV_FILE="$SDK_ROOT/tools/docker/container.env"
 ENV_ARGS=()
 [ -f "$ENV_FILE" ] && ENV_ARGS+=( --env-file "$ENV_FILE" )
 
+# Forward a host HTTP proxy into the container (host is reachable at the
+# docker bridge gateway) so downloads during the build are accelerated.
+if [ -n "${ZSH_HTTP_PROXY_URL:-}" ]; then
+    GW=$(ip route 2>/dev/null | awk '/docker0/{print $9; exit}')
+    if [ -n "$GW" ]; then
+        ENV_ARGS+=( -e "http_proxy=${ZSH_HTTP_PROXY_URL/127.0.0.1/$GW}" \
+                    -e "https_proxy=${ZSH_HTTP_PROXY_URL/127.0.0.1/$GW}" )
+    fi
+fi
+
 # The container ENTRYPOINT is `bash -lc`, so the whole command must arrive
 # as a single argument string.
 CMD="$*"
