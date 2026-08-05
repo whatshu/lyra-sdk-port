@@ -102,7 +102,7 @@ def env_facts(ctx) -> ET.Element:
 
     kv("container_image", os.environ.get("SDK_IMAGE", ""))
     kv("container_image_sha256", os.environ.get("SDK_IMAGE_SHA256", ""))
-    kv("toolchain", os.environ.get("SDK_TOOLCHAIN", "apt"))
+    kv("toolchain", os.environ.get("SDK_TOOLCHAIN_FLAVOR", "apt"))
     kv("apt_packages_sha256", os.environ.get("SDK_APT_PACKAGES", ""))
     kv("board", ctx.target)
     kv("mode", ctx.mode)

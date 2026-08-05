@@ -13,8 +13,7 @@ from pathlib import Path
 
 from util import die, info
 
-_KEY_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=\+?=)\s*(.*)$")
-_CONT_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(\+=?=)\s*(.*)$")
+_KEY_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?::=|\+=|==|\?=|=\?)\s*(.*)$")
 
 
 class BoardConfig:
@@ -57,14 +56,9 @@ def parse_mk(path: Path) -> dict[str, str]:
             m = _KEY_RE.match(line)
             if not m:
                 continue
-            key, op, value = m.group(1), m.group(2), m.group(3).strip()
+            key, value = m.group(1), m.group(2).strip()
             value = value.strip('"').strip("'")
-            if op == "+=":
-                data[key] = data.get(key, "") + " " + value
-            elif op == "?=" and key in data:
-                continue
-            else:
-                data[key] = value
+            data[key] = value
     return data
 
 

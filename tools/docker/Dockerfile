@@ -39,7 +39,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 perl pkg-config bc gawk patch gettext \
         device-tree-compiler lz4 xz-utils zstd cpio unzip zip rsync \
         kmod file e2fsprogs util-linux unifdef \
-        libssl-dev libelf-dev openssl curl ca-certificates \
+        libssl-dev libelf-dev libgmp-dev libmpc-dev libmpfr-dev \
+        openssl curl ca-certificates \
         locales tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen \
@@ -49,7 +50,7 @@ ENV LANG=en_US.UTF-8 LC_ALL=C.UTF-8
 
 # Record exactly which apt versions are in the image; every release
 # manifest points back at this image id, so the set is fully pinned.
-RUN dpkg-query -W -f="\${Package}\t\${Version}\n" > /etc/shu-sdk/packages.txt
+RUN mkdir -p /etc/shu-sdk && dpkg-query -W > /etc/shu-sdk/packages.txt
 
 # ---- vendor (Rockchip/ARM) cross toolchain -------------------------------
 # build-image.sh stages the sha256-verified tarball into the build context.

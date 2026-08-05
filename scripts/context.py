@@ -40,7 +40,7 @@ class Context:
     # ---- paths -----------------------------------------------------------
     def check_vendor(self) -> None:
         missing = []
-        for name in ("u-boot", "kernel", "buildroot", "rkbin"):
+        for name in ("uboot", "kernel", "buildroot", "rkbin"):
             d = getattr(self, name)
             if not d.is_dir():
                 missing.append(str(d.relative_to(self.root)))

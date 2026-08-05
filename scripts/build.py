@@ -37,13 +37,23 @@ ALL_STAGES = ["uboot", "kernel", "rootfs", "firmware"]
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="build.py",
                                  description="shu-sdk build orchestrator")
-    ap.add_argument("command", choices=["build", "release", "stage",
-                                        "list-stages", "list-boards", "clean"],
-                    help="what to do")
-    ap.add_argument("--board", default="lyra-ultra-w-emmc",
-                    help="board target (config/boards/<target>.mk)")
-    ap.add_argument("stages", nargs="*", help="stage names for `stage`")
+    sub = ap.add_subparsers(dest="command", required=True, metavar="COMMAND")
+
+    for name, help_ in (("build", "full build into volatile out/"),
+                        ("release", "full build + save to RELEASE/")):
+        p = sub.add_parser(name, help=help_)
+        p.add_argument("--board", default="lyra-ultra-w-emmc",
+                       help="board target (config/boards/<target>.mk)")
+    p_stage = sub.add_parser("stage", help="build one or more stages only")
+    p_stage.add_argument("--board", default="lyra-ultra-w-emmc",
+                         help="board target (config/boards/<target>.mk)")
+    p_stage.add_argument("stages", nargs="+", help="stage names")
+    sub.add_parser("list-stages", help="list stages")
+    sub.add_parser("list-boards", help="list board targets")
+    sub.add_parser("clean", help="remove out/")
+
     args = ap.parse_args(argv)
+    args.board = getattr(args, "board", "lyra-ultra-w-emmc")
 
     root = SDK_ROOT
 

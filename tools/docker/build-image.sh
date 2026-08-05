@@ -66,14 +66,15 @@ echo ">>> built $TAG ($ID)"
 APT_PKGS=""
 if [ "$USE_NIX" = 0 ]; then
     # hash of the recorded apt package versions inside the image
-    APT_PKGS="$(docker run --rm "$TAG" bash -c 'sha256sum /etc/shu-sdk/packages.txt | cut -d" " -f1')"
-    docker run --rm "$TAG" cat /etc/shu-sdk/packages.txt > tools/docker/packages.txt
+    # (the container ENTRYPOINT is /bin/bash -lc, so pass a plain string)
+    docker run --rm "$TAG" "cat /etc/shu-sdk/packages.txt" > tools/docker/packages.txt
+    APT_PKGS="$(sha256sum tools/docker/packages.txt | awk '{print $1}')"
 fi
 
 {
     echo "SDK_IMAGE=$TAG"
     echo "SDK_IMAGE_SHA256=$ID"
-    echo "SDK_TOOLCHAIN=apt"
+    echo "SDK_TOOLCHAIN_FLAVOR=apt"   # apt | nix
     echo "SDK_APT_PACKAGES=$APT_PKGS"
     echo "SDK_TOOL_SHA256=armhf=$TOOLCHAIN_ARMHF_SHA256"
 } > tools/docker/container.env

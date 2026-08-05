@@ -24,10 +24,18 @@ fi
 TTY_ARGS=()
 [ -t 0 ] && TTY_ARGS+=( -it )
 
+ENV_FILE="$SDK_ROOT/tools/docker/container.env"
+ENV_ARGS=()
+[ -f "$ENV_FILE" ] && ENV_ARGS+=( --env-file "$ENV_FILE" )
+
+# The container ENTRYPOINT is `bash -lc`, so the whole command must arrive
+# as a single argument string.
+CMD="$*"
 exec docker run "${TTY_ARGS[@]}" --rm \
     -v "$SDK_ROOT":/sdk \
     -v /etc/localtime:/etc/localtime:ro \
-    --env-file "$SDK_ROOT/tools/docker/container.env" \
+    "${ENV_ARGS[@]}" \
+    ${SDK_EXTRA_MOUNT:+-v "$SDK_EXTRA_MOUNT":"$SDK_EXTRA_MOUNT"} \
     -w /sdk \
     "$IMAGE" \
-    "$@"
+    "$CMD"
