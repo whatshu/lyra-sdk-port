@@ -1,0 +1,8 @@
+# Rockchip USB devices (bootrom/loader/ADB gadget) — grant user access so
+# upgrade_tool / rkdeveloptool can flash without root.
+#
+# Install (one time, as root):
+#   sudo cp tools/scripts/99-rockchip-usb.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#   # then re-plug the board
+SUBSYSTEM=="usb", ATTR{idVendor}=="2207", MODE="0666"
