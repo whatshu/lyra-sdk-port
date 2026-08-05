@@ -11,7 +11,11 @@
 set -euo pipefail
 
 cd "$VENDOR_DIR/buildroot"
-BR_OUT="output/$BUILDROOT_CFG"
+# Buildroot output lives in the volatile project build tree (out/), NOT in
+# the vendored buildroot, so component rebuilds never dirty the submodule
+# and `make clean` drops it.  The package source cache (BR2_DL_DIR) is the
+# only persistent buildroot state.
+BR_OUT="$OUT_DIR/buildroot-$BUILDROOT_CFG"
 
 # Centralised/custom buildroot defconfig override.
 if [ "$FULL" = "1" ]; then

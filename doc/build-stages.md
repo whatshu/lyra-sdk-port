@@ -60,6 +60,13 @@ make O=output/<cfg> <cfg>_defconfig
 make O=output/<cfg>
 ```
 
+> **Buildroot output is host-specific.**  The `output/<cfg>/host/` tree contains
+> host tools linked against the *building* machine's glibc; an output produced on
+> one host will fail at `target-finalize` on another (e.g.
+> `glib-compile-schemas: undefined symbol g_task_set_static_name`).  Always build
+> buildroot inside the pinned container from a clean output.  The package sources
+> in the shared `BR2_DL_DIR` cache are reused, so a clean build only re-compiles.
+
 buildroot's vendored post-build hook (`board/rockchip/common/post-build.sh`)
 calls our shim `device/rockchip/common/post-build.sh`, which runs
 `product/platform/rootfs/post-rootfs.sh`:
