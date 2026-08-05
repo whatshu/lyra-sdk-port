@@ -1,0 +1,16 @@
+[submodule "vendor/rockchip/u-boot"]
+	path = vendor/rockchip/u-boot
+	url = git@github.com:whatshu/lyra-u-boot.git
+	branch = main
+[submodule "vendor/rockchip/kernel"]
+	path = vendor/rockchip/kernel
+	url = git@github.com:whatshu/lyra-kernel.git
+	branch = main
+[submodule "vendor/rockchip/buildroot"]
+	path = vendor/rockchip/buildroot
+	url = git@github.com:whatshu/lyra-buildroot.git
+	branch = main
+[submodule "vendor/rockchip/rkbin"]
+	path = vendor/rockchip/rkbin
+	url = git@github.com:whatshu/lyra-rkbin.git
+	branch = main
