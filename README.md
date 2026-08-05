@@ -56,9 +56,11 @@ flowchart TB
   override and environment; each stage's recipe is a small `run.sh`.  Follows boot order:
   `uboot → kernel → rootfs → firmware`.
 - **Reproducible environment.** The container is `ubuntu:22.04@sha256:0199853f…`
-  (immutable digest).  Host build tools come from a pinned nixpkgs snapshot baked into
-  `/nix/store`; the ARM cross-compilers are the official binary releases pinned by sha256.
-  Upstream swapping an apt binary changes nothing.
+  (immutable digest).  Host build tools are pinned by the image digest plus the recorded
+  apt package versions (in the manifest); an optional `Dockerfile.nix` variant bakes a
+  sha256-locked nixpkgs toolchain into `/nix/store` instead, for networks where the nix
+  cache is reachable.  The ARM cross-compilers are the official binary releases pinned by
+  sha256.
 - **Releases are immutable snapshots.** Only `make release` saves artifacts — to
   `RELEASE/<target>-<timestamp>/` with `release.xml` (all repo commits, image hashes,
   tool hashes) and `sha256sums.txt`.  `make build` produces the same output in the
