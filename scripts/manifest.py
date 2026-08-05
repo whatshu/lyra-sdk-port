@@ -18,7 +18,7 @@ from pathlib import Path
 from xml.dom import minidom
 from xml.etree import ElementTree as ET
 
-from .util import SDK_ROOT, run, warn
+from util import SDK_ROOT, run, warn
 
 
 def git_commit(path: Path) -> str:
@@ -102,6 +102,8 @@ def env_facts(ctx) -> ET.Element:
 
     kv("container_image", os.environ.get("SDK_IMAGE", ""))
     kv("container_image_sha256", os.environ.get("SDK_IMAGE_SHA256", ""))
+    kv("toolchain", os.environ.get("SDK_TOOLCHAIN", "apt"))
+    kv("apt_packages_sha256", os.environ.get("SDK_APT_PACKAGES", ""))
     kv("board", ctx.target)
     kv("mode", ctx.mode)
     kv("uname", os.uname().nodename)

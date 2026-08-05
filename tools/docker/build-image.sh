@@ -1,54 +1,81 @@
 #!/usr/bin/env bash
 # Builds the shu-sdk build container.
 #
-# The image is produced entirely from pinned inputs:
-#   - ubuntu:22.04@sha256 (immutable digest)
-#   - nixpkgs snapshot (tools/nix/default.nix)
-#   - vendor ARM toolchains (tools/docker/toolchains.env, sha256 pinned)
+# Default: apt-pinned host tools (Dockerfile).  Pass --nix for the
+# nix-built toolchain (Dockerfile.nix) where the nix binary cache is
+# reachable.
 #
-# The resulting image is tagged shu-sdk:build-<git-head> and its id is
-# recorded in tools/docker/image.info so tools/docker/run.sh and the
-# release manifest can reference it.
+# Pinned inputs in both variants:
+#   - ubuntu:22.04@sha256 (immutable digest)
+#   - vendor ARM toolchain (tools/docker/toolchains.env, sha256 pinned)
+#   - apt: the exact package versions are recorded (default)
+#   - nix: nixpkgs snapshot (tools/nix/default.nix) baked into /nix/store
+#
+# The image id + the tool/package pins are written to
+# tools/docker/image.info and container.env, so every release manifest can
+# point back at exactly what produced it.
 set -euo pipefail
 
 SDK_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$SDK_ROOT"
+
+USE_NIX=0
+[ "${1:-}" = "--nix" ] && USE_NIX=1
 
 # --- load toolchain hashes -------------------------------------------------
 TC_ENV="$SDK_ROOT/tools/docker/toolchains.env"
 [ -f "$TC_ENV" ] || { echo "ERROR: $TC_ENV missing (copy toolchains.env.example)" >&2; exit 1; }
 set -a; . "$TC_ENV"; set +a
 
-for v in TOOLCHAIN_ARMHF_URL TOOLCHAIN_ARMHF_SHA256 \
-         TOOLCHAIN_ARM_EABI_URL TOOLCHAIN_ARM_EABI_SHA256; do
-    [ -n "${!v:-}" ] || { echo "ERROR: $v not set in $TC_ENV" >&2; exit 1; }
-done
+[ -n "$TOOLCHAIN_ARMHF_URL" ] && [ -n "$TOOLCHAIN_ARMHF_SHA256" ] || {
+    echo "ERROR: TOOLCHAIN_ARMHF_URL / TOOLCHAIN_ARMHF_SHA256 not set in $TC_ENV" >&2
+    exit 1; }
 
-# --- build context ----------------------------------------------------------
-# The Dockerfile only reads tools/nix + the toolchain args, so the whole
-# repo is the context (small) with .dockerignore trimming the fat.
+# --- stage the (verified) toolchain tarball into the build context --------
+CTX="$SDK_ROOT/tools/docker/context/toolchains"
+mkdir -p "$CTX"
+if [ -f "$CTX/armhf.tar.xz" ] && echo "$TOOLCHAIN_ARMHF_SHA256  $CTX/armhf.tar.xz" | \
+        sha256sum -c - >/dev/null 2>&1; then
+    echo ">>> using cached toolchain tarball"
+else
+    echo ">>> downloading $TOOLCHAIN_ARMHF_URL"
+    curl -fsSL -o "$CTX/armhf.tar.xz.part" "$TOOLCHAIN_ARMHF_URL" \
+        || { echo "ERROR: download failed" >&2; exit 1; }
+    echo "$TOOLCHAIN_ARMHF_SHA256  $CTX/armhf.tar.xz.part" | sha256sum -c - \
+        || { echo "ERROR: sha256 mismatch" >&2; exit 1; }
+    mv -f "$CTX/armhf.tar.xz.part" "$CTX/armhf.tar.xz"
+fi
+
+# --- build ------------------------------------------------------------------
 TAG="shu-sdk:build-$(git rev-parse --short HEAD 2>/dev/null || echo dev)"
+DOCKERFILE="tools/docker/Dockerfile"
+[ "$USE_NIX" = 1 ] && DOCKERFILE="tools/docker/Dockerfile.nix"
 
-echo ">>> building $TAG"
+echo ">>> building $TAG ($DOCKERFILE)"
 docker build \
-    --build-arg "TOOLCHAIN_ARMHF_URL=$TOOLCHAIN_ARMHF_URL" \
     --build-arg "TOOLCHAIN_ARMHF_SHA256=$TOOLCHAIN_ARMHF_SHA256" \
-    --build-arg "TOOLCHAIN_ARM_EABI_URL=$TOOLCHAIN_ARM_EABI_URL" \
-    --build-arg "TOOLCHAIN_ARM_EABI_SHA256=$TOOLCHAIN_ARM_EABI_SHA256" \
-    -f tools/docker/Dockerfile \
+    --build-arg "APT_MIRROR=${APT_MIRROR:-mirrors.aliyun.com}" \
+    -f "$DOCKERFILE" \
     -t "$TAG" \
     "$SDK_ROOT"
 
 ID=$(docker inspect --format '{{.Id}}' "$TAG")
 echo ">>> built $TAG ($ID)"
 
-# Record the exact inputs for the release manifest.
-NIX_TOOLS=$(docker run --rm "$TAG" bash -c 'ls -d /nix/store/*-shu-sdk-tools | head -1')
-NIX_HASH=$(basename "$NIX_TOOLS" | cut -d- -f1)
+# --- record exact inputs for the release manifest --------------------------
+APT_PKGS=""
+if [ "$USE_NIX" = 0 ]; then
+    # hash of the recorded apt package versions inside the image
+    APT_PKGS="$(docker run --rm "$TAG" bash -c 'sha256sum /etc/shu-sdk/packages.txt | cut -d" " -f1')"
+    docker run --rm "$TAG" cat /etc/shu-sdk/packages.txt > tools/docker/packages.txt
+fi
+
 {
     echo "SDK_IMAGE=$TAG"
     echo "SDK_IMAGE_SHA256=$ID"
-    echo "SDK_TOOL_SHA256=make=${NIX_HASH} armhf=${TOOLCHAIN_ARMHF_SHA256} eabi=${TOOLCHAIN_ARM_EABI_SHA256}"
+    echo "SDK_TOOLCHAIN=apt"
+    echo "SDK_APT_PACKAGES=$APT_PKGS"
+    echo "SDK_TOOL_SHA256=armhf=$TOOLCHAIN_ARMHF_SHA256"
 } > tools/docker/container.env
 cat > tools/docker/image.info <<EOF
 IMAGE=$TAG

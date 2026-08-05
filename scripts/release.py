@@ -13,8 +13,8 @@ import time
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from .manifest import build_manifest, file_sha256, write_manifest
-from .util import die, info, notice
+from manifest import build_manifest, file_sha256, write_manifest
+from util import die, info, notice
 
 
 def collect_firmware(ctx) -> list[Path]:

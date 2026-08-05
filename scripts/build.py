@@ -17,15 +17,19 @@ Python; per-stage recipes are bash scripts under stages/.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 from pathlib import Path
 
-from .config import list_boards
-from .context import Context
-from .engine import load_stages, order_stages, run_stages
-from .release import collect_firmware, make_release_dir
-from .util import SDK_ROOT, die, info, notice
+# Allow running as `./scripts/build.py` (not just `python3 -m scripts.build`).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from config import list_boards
+from context import Context
+from engine import load_stages, order_stages, run_stages
+from release import collect_firmware, make_release_dir
+from util import SDK_ROOT, die, info, notice
 
 ALL_STAGES = ["uboot", "kernel", "rootfs", "firmware"]
 

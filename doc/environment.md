@@ -7,10 +7,14 @@ The image is built by `tools/docker/build-image.sh` from:
 1. **A pinned base image.** `ubuntu:22.04@sha256:0199853f6d6b20b0424f3c5694a72a62764f01e6a771b1eb48a4197848986c7e`
    — an immutable digest, not a moving `22.04` tag, so an upstream rebuild of the
    "same" tag cannot change the build.
-2. **nix-pinned host tools.** `tools/nix/default.nix` pins a nixpkgs snapshot
-   (`release-24.11`, sha256-locked).  The host toolchain (make, gcc, python, dtc,
-   cpio, kmod, …) is built once and the immutable closure is baked into
-   `/nix/store`.  Nothing build-critical is installed from apt.
+2. **Host tools — two variants:**
+   - *Default (apt):* the same host toolchain the official SDK installs, pinned by
+     the immutable base image plus the exact package versions recorded in
+     `/etc/shu-sdk/packages.txt` (hashed into every release manifest).
+   - *Stronger pin (`make docker-image NIX=1`):* `tools/nix/default.nix` pins a
+     nixpkgs snapshot (`release-24.11`, sha256-locked); the host tools are built
+     once and the immutable closure is baked into `/nix/store`, independent of
+     the apt archive.  This needs the nix binary cache to be reachable.
 3. **Vendor ARM toolchains.** The official Rockchip/ARM binary releases, fetched
    with sha256 pinned in `tools/docker/toolchains.env`.  These are used as-is
    (never rebuilt from source).  Hash mismatches fail the image build loudly.

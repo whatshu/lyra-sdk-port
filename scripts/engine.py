@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from .util import SDK_ROOT, die, info, notice, run, warn
+from util import SDK_ROOT, die, info, notice, run, warn
 
 
 @dataclass
@@ -47,28 +47,56 @@ class StageError(Exception):
 def _parse_yaml_lite(path: Path) -> dict:
     """A deliberately tiny YAML-subset parser for stage.yaml.
 
-    Only supports flat mappings and list values written as
-    `  - item`.  Keeps the engine dependency-free.
+    Handles the shapes we use: flat scalars, one level of nested
+    mapping (`config:`), and lists of scalars (`needs:`).  Keeps the
+    engine dependency-free.
     """
-    out: dict = {}
-    with open(path) as f:
-        for line in f:
-            line = line.split("#", 1)[0].rstrip()
+
+    def parse(lines: list[str], start: int = 0, indent: int = -1):
+        result: dict = {}
+        i = start
+        n = len(lines)
+        while i < n:
+            line = lines[i]
             if not line.strip():
+                i += 1
                 continue
-            if line.startswith(("  ", "\t")):
-                k = out.get("__last__")
-                if k is not None and isinstance(out.get(k), list):
-                    out[k].append(line.strip()[2:].strip())
-                continue
-            if ":" in line:
-                k, v = line.split(":", 1)
-                k = k.strip()
-                v = v.strip()
-                out["__last__"] = k
-                out[k] = [] if v == "" else v
-    out.pop("__last__", None)
-    return out
+            cur = len(line) - len(line.lstrip())
+            if cur <= indent:
+                break
+            key, _, rest = line.strip().partition(":")
+            rest = rest.strip()
+            if rest.startswith("[") and rest.endswith("]"):
+                # inline list: [] or [a, b]
+                inner = rest[1:-1].strip()
+                result[key] = [x.strip() for x in inner.split(",")] \
+                    if inner else []
+                i += 1
+            elif rest == "":
+                # nested mapping or list of scalars?
+                if i + 1 < n and lines[i + 1].strip().startswith("- "):
+                    lst: list[str] = []
+                    j = i + 1
+                    while j < n and lines[j].strip():
+                        c = lines[j].strip()
+                        ci = len(lines[j]) - len(lines[j].lstrip())
+                        if ci <= cur or not c.startswith("- "):
+                            break
+                        lst.append(c[2:].strip())
+                        j += 1
+                    result[key] = lst
+                    i = j
+                else:
+                    sub, i = parse(lines, i + 1, cur)
+                    result[key] = sub
+            else:
+                result[key] = rest
+                i += 1
+        return result, i
+
+    lines = [l for l in open(path) if not l.strip().startswith("#")]
+    parsed, _ = parse(lines)
+    return parsed
 
 
 def load_stages(root: Path) -> list[Stage]:

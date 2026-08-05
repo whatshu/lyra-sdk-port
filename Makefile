@@ -48,7 +48,8 @@ setup:
 
 .PHONY: docker-image
 docker-image:
-	tools/docker/build-image.sh
+	@if [ "$(NIX)" = "1" ]; then tools/docker/build-image.sh --nix; \
+	else tools/docker/build-image.sh; fi
 
 .PHONY: list-boards
 list-boards:

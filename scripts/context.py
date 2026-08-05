@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .config import BoardConfig, load_board, list_boards
-from .util import SDK_ROOT, die, warn
+from config import BoardConfig, load_board, list_boards
+from util import SDK_ROOT, die, warn
 
 TOOLCHAIN_ARMHF = "gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf"
 TOOLCHAIN_ARM_EABI = "gcc-arm-none-eabi-10-2020-q4-major-x86_64-linux"

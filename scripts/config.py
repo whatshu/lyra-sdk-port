@@ -11,7 +11,7 @@ import os
 import re
 from pathlib import Path
 
-from .util import die, info
+from util import die, info
 
 _KEY_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=\+?=)\s*(.*)$")
 _CONT_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(\+=?=)\s*(.*)$")

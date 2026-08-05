@@ -1,0 +1,11 @@
+# The image build only needs the Dockerfile, the nix toolchain definition
+# and the staged toolchain tarballs.  Whitelist them explicitly so a
+# 2 GB+ source tree never enters the build context.
+*
+!tools
+!tools/nix
+!tools/nix/**
+!tools/docker
+!tools/docker/Dockerfile
+!tools/docker/context
+!tools/docker/context/**
