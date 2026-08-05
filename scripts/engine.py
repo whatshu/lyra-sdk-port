@@ -188,7 +188,8 @@ def run_stage(stage: Stage, ctx, full: bool) -> None:
         die(f"stage '{stage.name}': run script '{stage.run}' not found")
     env = ctx.stage_env(stage.name, full)
     env.update(ctx.toolchain_env())
-    run(["bash", str(run_script)], cwd=ctx.root, env=env)
+    log = ctx.log_dir / f"{stage.name}.log"
+    run(["bash", str(run_script)], cwd=ctx.root, env=env, log_to=log)
 
 
 def run_stages(ctx, stages: list[Stage], names: Optional[list[str]],
