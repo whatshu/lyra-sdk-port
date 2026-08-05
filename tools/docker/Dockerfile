@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential make cmake ninja-build bison flex \
         python3 perl pkg-config bc gawk patch gettext \
         device-tree-compiler lz4 xz-utils zstd cpio unzip zip rsync \
-        kmod file e2fsprogs util-linux unifdef \
+        kmod file e2fsprogs util-linux unifdef bsdmainutils \
         libssl-dev libelf-dev libgmp-dev libmpc-dev libmpfr-dev \
         openssl openssh-client curl wget git ca-certificates \
         locales tzdata \
