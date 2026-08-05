@@ -40,7 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         device-tree-compiler lz4 xz-utils zstd cpio unzip zip rsync \
         kmod file e2fsprogs util-linux unifdef \
         libssl-dev libelf-dev libgmp-dev libmpc-dev libmpfr-dev \
-        openssl curl wget git ca-certificates \
+        openssl openssh-client curl wget git ca-certificates \
         locales tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen \
