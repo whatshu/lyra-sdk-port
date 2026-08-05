@@ -44,8 +44,10 @@ uboot		Image/uboot.img
 boot		Image/boot.img
 rootfs		Image/rootfs.img
 EOF
+    # The rkImageMaker tag (e.g. RK3506) is embedded in the loader header.
+    TAG="RK$(hexdump -s 21 -n 4 -e '4 "%c"' "$FW/MiniLoaderAll.bin" | rev)"
     ( cd "$PKG" && "$SDK_ROOT/tools/host/rk/afptool" -pack ./ update.raw.img && \
-      "$SDK_ROOT/tools/host/rk/rkImageMaker" -RK3506 \
+      "$SDK_ROOT/tools/host/rk/rkImageMaker" "-$TAG" \
         Image/MiniLoaderAll.bin update.raw.img "$FW/update.img" -os_type:androidos )
 else
     echo "WARNING: afptool/rkImageMaker missing; skipping update.img"
