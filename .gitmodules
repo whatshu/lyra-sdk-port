@@ -18,3 +18,7 @@
 	path = vendor/rockchip/external
 	url = git@github.com:whatshu/lyra-external.git
 	branch = main
+[submodule "vendor/rockchip/app"]
+	path = vendor/rockchip/app
+	url = git@github.com:whatshu/lyra-app.git
+	branch = main
