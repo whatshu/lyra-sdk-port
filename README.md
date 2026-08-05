@@ -44,10 +44,11 @@ flowchart TB
 
 ## Why this shape
 
-- **Repos as submodules.** `vendor/rockchip/{kernel,u-boot,buildroot,rkbin}` are git
-  submodules pointing at pinned mirrors (`whatshu/lyra-*`) of the Luckfox SDK component
-  repos.  The official `repo` tool is not used.  Every commit is recorded in the release
-  manifest.
+- **Repos as submodules.** `vendor/rockchip/{kernel,u-boot,buildroot,rkbin,external,app}`
+  are git submodules pointing at pinned mirrors (`whatshu/lyra-*`) of the Luckfox SDK
+  component repos (kernel/u-boot/buildroot/rkbin + the external component + app sources
+  the buildroot packages sync from).  The official `repo` tool is not used.  Every commit
+  is recorded in the release manifest.
 - **Configs centralised.** The board definitions (`config/boards/*.mk`) and component
   configs (`product/platform/configs/`) live in this repo.  A **full build** copies them
   over the vendor trees, resetting any hand-tuned temp config; a **partial build** leaves
