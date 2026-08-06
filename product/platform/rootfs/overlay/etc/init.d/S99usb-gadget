@@ -34,8 +34,8 @@ start)
     ln -s "$G/functions/rndis.usb0" "$G/configs/c.1/"
     echo "$UDC" > "$G/UDC"
 
-    # bring the network up
-    ifconfig usb0 192.168.1.1 up 2>/dev/null || true
+    # bring the network up (host side is 192.168.123.10/24)
+    ifconfig usb0 192.168.123.100 up 2>/dev/null || true
     ;;
 esac
 exit 0
