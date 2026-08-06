@@ -1,0 +1,41 @@
+#!/bin/sh
+# S99usb-gadget — configure the USB RNDIS (+ adb) gadget via configfs.
+# Provides the network interface (usb0) used for SSH-over-RNDIS.
+# Mirrors the official SDK's usb-gadget overlay for busybox init.
+
+USB_PID=0x0013
+USB_SERIAL="35549d1ed33ac33"
+
+case "$1" in
+start)
+    # load the gadget modules (kernel built them as modules)
+    for m in libcomposite usb_f_rndis usb_f_fs; do
+        modprobe "$m" 2>/dev/null || true
+    done
+
+    # configfs
+    mount -t configfs configfs /sys/kernel/config 2>/dev/null || true
+
+    UDC=$(ls /sys/class/udc/ 2>/dev/null | head -1)
+    [ -n "$UDC" ] || exit 0
+
+    G=/sys/kernel/config/usb_gadget/lyra
+    [ -e "$G" ] && exit 0
+    mkdir -p "$G/strings/0x409"
+    echo 0x2207 > "$G/idVendor"
+    echo "$USB_PID" > "$G/idProduct"
+    echo "$USB_SERIAL" > "$G/strings/0x409/serialnumber"
+    echo "Luckfox" > "$G/strings/0x409/manufacturer"
+    echo "Luckfox Lyra" > "$G/strings/0x409/product"
+
+    mkdir -p "$G/functions/rndis.usb0"
+    mkdir -p "$G/configs/c.1/strings/0x409"
+    echo "RNDIS" > "$G/configs/c.1/strings/0x409/configuration"
+    ln -s "$G/functions/rndis.usb0" "$G/configs/c.1/"
+    echo "$UDC" > "$G/UDC"
+
+    # bring the network up
+    ifconfig usb0 192.168.1.1 up 2>/dev/null || true
+    ;;
+esac
+exit 0
