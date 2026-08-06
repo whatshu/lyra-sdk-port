@@ -113,6 +113,11 @@ flash:
 flash-latest:
 	tools/scripts/flash.sh $(BOARD) latest
 
+.PHONY: pico2
+pico2:
+	@echo "Pico 2 (RP2350) debug over SWD + SPI — see doc/pico2.md"
+	@echo "  ssh -p 10024 root@127.0.0.1   # then on the Lyra: pico2 info / pico2 flash <img>"
+
 # ---------------------------------------------------------------------------
 .PHONY: fmt
 fmt:

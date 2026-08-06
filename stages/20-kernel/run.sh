@@ -8,6 +8,19 @@ set -euo pipefail
 
 cd "$VENDOR_DIR/kernel"
 
+# Centralised board-DTS override: on a FULL build a file at
+# product/platform/dts/$KERNEL_DTS.dts replaces the vendored board dts
+# (mirrors the config-override behaviour of the other stages).
+if [ "$FULL" = "1" ]; then
+    for d in "$SDK_ROOT/product/platform/dts" "$SDK_ROOT/product/custom/dts"; do
+        [ -d "$d" ] || continue
+        if [ -f "$d/$KERNEL_DTS.dts" ]; then
+            cp -f "$d/$KERNEL_DTS.dts" "arch/arm/boot/dts/$KERNEL_DTS.dts"
+            echo "kernel: using overridden dts $d/$KERNEL_DTS.dts"
+        fi
+    done
+fi
+
 # mkimage is needed by scripts/mkimg for the boot image.
 export PATH="$VENDOR_DIR/rkbin/tools:$PATH"
 

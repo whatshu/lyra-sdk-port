@@ -125,6 +125,15 @@ make clean                             # drop out/
   post-rootfs hook that wires up fstab/modules/os-release lives in
   `product/platform/rootfs/post-rootfs.sh`.
 
+## Pico 2 (RP2350) debug + SPI
+
+The board can debug and control an external Raspberry Pi Pico 2: **SWD is
+bit-banged over the RMIO header by OpenOCD** (sysfs GPIO 41/42, RP2350-capable
+snapshot), and **SPI1 is enabled** as `/dev/spidev1.0` on RMIO8/9/10/14 for data
+comms (python-spidev is in the rootfs).  On the device: `pico2 info`, `pico2
+flash <img>`, `pico2-spi-demo.py`.  See `doc/pico2.md` for the exact wiring
+(Luckfox RMIO pins → Pico 2 SWD debug pads + SPI).
+
 ## Recovering the device
 
 The loader always ships with the Rockchip USB download function

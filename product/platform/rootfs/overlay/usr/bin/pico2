@@ -1,0 +1,41 @@
+#!/bin/sh
+# pico2 — RP2350 (Pico 2) SWD helper for the Luckfox Lyra.
+#
+# Bit-bangs SWD over the RMIO header via OpenOCD's sysfsgpio driver.
+# Usage:
+#   pico2 flash <image> [base]   program an ELF/hex/bin, verify, reset, exit
+#   pico2 halt                   halt the running core
+#   pico2 run                    reset and run
+#   pico2 reset                  reset (stay halted / connect)
+#   pico2 info                   connect and print the target list
+#
+# Wiring is defined in /etc/openocd/pico2.cfg.
+set -e
+CFG=/etc/openocd/pico2.cfg
+
+[ -r "$CFG" ] || { echo "pico2: config $CFG not found" >&2; exit 1; }
+
+case "${1:-info}" in
+    flash)
+        shift
+        [ -n "${1:-}" ] || { echo "usage: pico2 flash <image> [base]" >&2; exit 2; }
+        exec openocd -f "$CFG" -c init -c halt \
+            -c "program $1${2:+ $2} verify reset" -c shutdown
+        ;;
+    halt)
+        exec openocd -f "$CFG" -c init -c halt -c shutdown
+        ;;
+    run)
+        exec openocd -f "$CFG" -c init -c 'reset run' -c shutdown
+        ;;
+    reset)
+        exec openocd -f "$CFG" -c init -c reset -c shutdown
+        ;;
+    info)
+        exec openocd -f "$CFG" -c init -c targets -c shutdown
+        ;;
+    *)
+        echo "usage: pico2 { flash <image> [base] | halt | run | reset | info }" >&2
+        exit 2
+        ;;
+esac
