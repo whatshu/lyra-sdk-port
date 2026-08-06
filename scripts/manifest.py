@@ -21,9 +21,14 @@ from xml.etree import ElementTree as ET
 from util import SDK_ROOT, run, warn
 
 
+# The build runs in a root container over host-owned .git dirs; without this
+# git refuses to read them ("detected dubious ownership").
+GIT_SAFE = ["-c", "safe.directory=*"]
+
+
 def git_commit(path: Path) -> str:
     try:
-        r = subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"],
+        r = subprocess.run(["git", *GIT_SAFE, "-C", str(path), "rev-parse", "HEAD"],
                            capture_output=True, text=True, check=True)
         return r.stdout.strip()
     except Exception:
@@ -32,7 +37,7 @@ def git_commit(path: Path) -> str:
 
 def git_describe(path: Path) -> str:
     try:
-        r = subprocess.run(["git", "-C", str(path), "describe",
+        r = subprocess.run(["git", *GIT_SAFE, "-C", str(path), "describe",
                             "--always", "--tags", "--dirty"],
                            capture_output=True, text=True, check=True)
         return r.stdout.strip()
@@ -59,7 +64,7 @@ def git_status(ctx) -> ET.Element:
     m.set("describe", git_describe(SDK_ROOT))
 
     sub = subprocess.run(
-        ["git", "-C", str(SDK_ROOT), "submodule", "status"],
+        ["git", *GIT_SAFE, "-C", str(SDK_ROOT), "submodule", "status"],
         capture_output=True, text=True).stdout
     for line in sub.splitlines():
         if not line.strip():
