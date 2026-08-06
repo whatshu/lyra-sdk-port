@@ -36,6 +36,12 @@ if [ "$FULL" = "1" ] || [ ! -f "$BR_OUT/.config" ]; then
     make O="$BR_OUT" "${BUILDROOT_CFG}_defconfig"
 fi
 
+# The RK buildroot generates the early rootfs.cpio from
+# $(TOPDIR)/../output/buildroot/target (which the post-rootfs publishes
+# later).  Pre-create it so that first pass doesn't fail on a missing dir;
+# the post-build pass regenerates the images from the real content.
+mkdir -p "$SDK_ROOT/vendor/rockchip/output/buildroot/target"
+
 # BR2_DL_DIR stays at the vendor buildroot/dl (persistent cache).
 make O="$BR_OUT" -j"$NPROC"
 
