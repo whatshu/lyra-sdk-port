@@ -33,3 +33,4 @@ __pycache__/
 # Editor / OS
 *.swp
 .DS_Store
+.serial_mcp
