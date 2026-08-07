@@ -9,7 +9,7 @@ stage pipeline.
 
 ```mermaid
 flowchart TB
-    subgraph manifest[product-manifest (this repo)]
+    subgraph manifest["product-manifest (this repo)"]
         O[orchestrator<br/>Makefile -> scripts/build.py]
         P[product/platform<br/>central configs, patches, rootfs overlay]
         C[product/custom<br/>your customisations]
@@ -141,8 +141,10 @@ The loader always ships with the Rockchip USB download function
 driver, so there is always a *software* way back into the flashable
 loader mode — no pins, no buttons:
 
-- **System is booting** → `adb reboot loader` (or `reboot loader` on the
-  serial console) reboots straight into loader mode; then `make flash`.
+- **System is booting** → `reboot-loader` (a small tool in the rootfs that
+  calls `reboot(RESTART2, "loader")` through the raw syscall; busybox
+  `reboot` never passes the reason) drops straight into loader mode; then
+  `make flash`.
 - **System won't boot, loader intact** → power-cycle; u-boot falls back to
   loader/download mode, or hold **BOOT** on power-up for maskrom.
 - **Worst case** → hold **BOOT** on power-up → maskrom (deepest recovery);

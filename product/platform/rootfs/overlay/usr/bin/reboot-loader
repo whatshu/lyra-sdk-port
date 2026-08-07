@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""Reboot the board into Rockchip loader (USB download) mode.
+
+busybox `reboot` never passes a reason string to the kernel, and glibc's
+reboot() wrapper misdelivers the RESTART2 arg on this ARM target (the
+kernel sees a truncated string).  The raw reboot(2) syscall with the
+magic numbers carries the reason reliably: the kernel's reboot notifier
+then stores the matching boot-mode magic, which u-boot honours and
+drops into Rockusb download mode.
+
+Usage: reboot-loader [reason]     (default reason: "loader")
+"""
+import ctypes
+import sys
+
+# asm-generic/unistd.h: __NR_reboot = 88 on ARM; the 4-arg raw syscall.
+LINUX_REBOOT_MAGIC1 = 0xFEE1DEAD
+LINUX_REBOOT_MAGIC2 = 672274793          # 0x28121969
+LINUX_REBOOT_CMD_RESTART2 = 0xA1B2C3D4
+SYS_REBOOT = 88
+
+reason = (sys.argv[1] if len(sys.argv) > 1 else "loader").encode("ascii")
+
+libc = ctypes.CDLL(None, use_errno=True)
+libc.syscall.restype = ctypes.c_long
+buf = ctypes.create_string_buffer(reason, len(reason) + 1)
+
+rc = libc.syscall(SYS_REBOOT, LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2,
+                  LINUX_REBOOT_CMD_RESTART2, ctypes.addressof(buf))
+if rc != 0:
+    err = ctypes.get_errno()
+    sys.stderr.write(f"reboot syscall failed (errno {err})\n")
+    sys.exit(1)
+# The reboot syscall never returns on success.
