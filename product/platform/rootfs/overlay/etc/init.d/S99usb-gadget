@@ -1,15 +1,19 @@
 #!/bin/sh
-# S99usb-gadget — configure the USB RNDIS (+ adb) gadget via configfs.
-# Provides the network interface (usb0) used for SSH-over-RNDIS.
+# S99usb-gadget — configure the USB CDC-ECM (+ adb) gadget via configfs.
+# Provides the network interface (usb0) used for SSH over the USB link.
+# CDC-ECM is the native Linux USB ethernet class (vs RNDIS, a Windows
+# protocol); the device keeps a static IP and a dnsmasq DHCP server hands
+# the host an address automatically, so no host-side config is needed.
 # Mirrors the official SDK's usb-gadget overlay for busybox init.
 
 USB_PID=0x0013
 USB_SERIAL="35549d1ed33ac33"
+USB_NET_IP="192.168.123.100"
 
 case "$1" in
 start)
     # load the gadget modules (kernel built them as modules)
-    for m in libcomposite usb_f_rndis usb_f_fs; do
+    for m in libcomposite usb_f_ecm usb_f_fs; do
         modprobe "$m" 2>/dev/null || true
     done
 
@@ -28,14 +32,18 @@ start)
     echo "Luckfox" > "$G/strings/0x409/manufacturer"
     echo "Luckfox Lyra" > "$G/strings/0x409/product"
 
-    mkdir -p "$G/functions/rndis.usb0"
+    mkdir -p "$G/functions/ecm.usb0"
     mkdir -p "$G/configs/c.1/strings/0x409"
-    echo "RNDIS" > "$G/configs/c.1/strings/0x409/configuration"
-    ln -s "$G/functions/rndis.usb0" "$G/configs/c.1/"
+    echo "ECM" > "$G/configs/c.1/strings/0x409/configuration"
+    ln -s "$G/functions/ecm.usb0" "$G/configs/c.1/"
     echo "$UDC" > "$G/UDC"
 
-    # bring the network up (host side is 192.168.123.10/24)
-    ifconfig usb0 192.168.123.100 up 2>/dev/null || true
+    # bring the network up; the host gets 192.168.123.10+ from DHCP below.
+    ifconfig usb0 "$USB_NET_IP" up 2>/dev/null || true
+
+    # serve DHCP on usb0 so the Linux host configures itself automatically
+    killall dnsmasq 2>/dev/null || true
+    dnsmasq 2>/dev/null || true
     ;;
 esac
 exit 0

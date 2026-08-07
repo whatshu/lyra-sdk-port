@@ -39,10 +39,14 @@ verify against the [Luckfox Lyra Pinout](https://wiki.luckfox.com/Luckfox-Lyra/P
 - `/usr/bin/pico2` — helper: `flash`, `halt`, `run`, `reset`, `info`.
 - `/usr/bin/pico2-spi-demo.py` — python-spidev loopback check.
 
-## Using the debugger (run on the Lyra, via SSH-over-RNDIS)
+## Using the debugger (run on the Lyra, over the USB network)
+
+Plug the USB-C into a Linux host — the gadget exposes a CDC-ECM link and a
+DHCP server, so the host auto-configures (e.g. 192.168.123.x).  SSH straight
+to the device:
 
 ```sh
-ssh -p 10024 root@127.0.0.1          # host side; the Lyra is 192.168.123.100
+ssh root@192.168.123.100             # password: luckfox
 
 # connect and list targets
 pico2 info
