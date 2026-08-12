@@ -78,7 +78,7 @@ stage:
 
 .PHONY: shell
 shell:
-	$(DOCKER) bash
+	RUN_INTERACTIVE=1 $(DOCKER) bash
 
 .PHONY: clean
 clean:
@@ -91,11 +91,11 @@ clean:
 
 .PHONY: uboot-menuconfig kernel-menuconfig buildroot-menuconfig
 uboot-menuconfig:
-	$(DOCKER) bash -lc 'cd vendor/rockchip/u-boot && make CROSS_COMPILE=$${TOOLCHAIN_PREFIX} menuconfig && ./make.sh CROSS_COMPILE=$${TOOLCHAIN_PREFIX} --spl-new'
+	RUN_INTERACTIVE=1 $(DOCKER) bash -lc 'cd vendor/rockchip/u-boot && make CROSS_COMPILE=$${TOOLCHAIN_PREFIX} menuconfig && ./make.sh CROSS_COMPILE=$${TOOLCHAIN_PREFIX} --spl-new'
 kernel-menuconfig:
-	$(DOCKER) bash -lc 'cd vendor/rockchip/kernel && make ARCH=$${KERNEL_ARCH} CROSS_COMPILE=$${TOOLCHAIN_PREFIX} menuconfig'
+	RUN_INTERACTIVE=1 $(DOCKER) bash -lc 'cd vendor/rockchip/kernel && make ARCH=$${KERNEL_ARCH} CROSS_COMPILE=$${TOOLCHAIN_PREFIX} menuconfig'
 buildroot-menuconfig:
-	$(DOCKER) bash -lc 'cd vendor/rockchip/buildroot && make O=output/$${BUILDROOT_CFG} menuconfig'
+	RUN_INTERACTIVE=1 $(DOCKER) bash -lc 'cd vendor/rockchip/buildroot && make O=output/$${BUILDROOT_CFG} menuconfig'
 
 # ---------------------------------------------------------------------------
 # Device flashing — the software path back to the bootrom.
