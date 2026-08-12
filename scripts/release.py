@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tarfile
 import time
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from manifest import build_manifest, file_sha256, write_manifest
-from util import die, info, notice
+from util import die, info, notice, warn
 
 
 def collect_firmware(ctx) -> list[Path]:
@@ -83,7 +84,36 @@ def make_release_dir(ctx, artifacts: list[Path]) -> Path:
         "\n".join(p.name for p in sorted(copied)) + "\n")
 
     update_index(ctx, release_dir, xml)
+
+    make_flash_tarball(ctx, fw_dir)
     return release_dir
+
+
+def make_flash_tarball(ctx, fw_dir: Path) -> Path:
+    """Build RELEASE/flash-<target>.tar.gz holding just the latest
+    flashable image (update.img.xz), nothing else.
+
+    The tarball is overwritten on every release so it always points at
+    the newest firmware; you flash it on a Linux host with
+    `xz -d update.img.xz && ./upgrade_tool uf update.img` (or any
+    Rockchip download tool).  Upgrade tooling is *not* bundled — that is
+    environment-specific and should be installed once on the host.
+    """
+    tarball = ctx.release / f"flash-{ctx.target}.tar.gz"
+    # prefer the compressed all-in-one image; fall back to the raw one
+    img = None
+    for name in ("update.img.xz", "update.img"):
+        cand = fw_dir / name
+        if cand.exists():
+            img = cand
+            break
+    if img is None:
+        warn("no update.img in release to pack into flash tarball; skipped")
+        return tarball
+    with tarfile.open(tarball, "w:gz") as tf:
+        tf.add(img, arcname=img.name)
+    notice(f"flash tarball updated: {tarball} ({img.name})")
+    return tarball
 
 
 def update_index(ctx, release_dir: Path, xml: str) -> None:
