@@ -49,6 +49,11 @@ EOF
     ( cd "$PKG" && "$SDK_ROOT/tools/host/rk/afptool" -pack ./ update.raw.img && \
       "$SDK_ROOT/tools/host/rk/rkImageMaker" "-$TAG" \
         Image/MiniLoaderAll.bin update.raw.img "$FW/update.img" -os_type:androidos )
+
+    # xz-compress update.img (parallel) so the same build is cheap to
+    # archive/transfer; make release does the same for its snapshot.
+    msg "compressing update.img"
+    xz -T0 -6 -k -c "$FW/update.img" > "$FW/update.img.xz"
 else
     echo "WARNING: afptool/rkImageMaker missing; skipping update.img"
 fi

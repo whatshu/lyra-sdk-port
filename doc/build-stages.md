@@ -84,7 +84,10 @@ The buildroot download cache stays in `vendor/rockchip/buildroot/dl`.
 ### 40-firmware
 Collects `MiniLoaderAll.bin`, `uboot.img`, `boot.img`, `rootfs.img` and the
 `parameter.txt` (from `config/image/`) into `out/firmware/`, then packs the
-all-in-one `update.img` with the vendored `afptool` + `rkImageMaker`.
+all-in-one `update.img` with the vendored `afptool` + `rkImageMaker`.  The
+stage also xz-compresses it (`xz -T0 -6`, multi-threaded) into
+`out/firmware/update.img.xz` so the same build is cheap to archive/transfer
+(`make release` compresses its snapshot copies the same way).
 
 ## Partial build pitfalls
 
