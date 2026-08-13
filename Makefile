@@ -116,6 +116,7 @@ flash-latest:
 .PHONY: pico2
 pico2:
 	@echo "Pico 2 (RP2350) debug over SWD + SPI — see doc/pico2.md"
+	@echo "  Build the board variant:  make build BOARD=lyra-ultra-w-emmc-pico2"
 	@echo "  ssh -p 10024 root@127.0.0.1   # then on the Lyra: pico2 info / pico2 flash <img>"
 
 # ---------------------------------------------------------------------------

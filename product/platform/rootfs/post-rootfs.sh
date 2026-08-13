@@ -89,9 +89,12 @@ if [ -d "$VENDOR/kernel" ] && [ -f "$VENDOR/kernel/.config" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Product overlays (platform + custom) — the central customisation point
+# 5. Product overlays (platform + custom) — the central customisation point.
+# A per-board overlay ($PLATFORM/overlay-$TARGET, e.g.
+# overlay-lyra-ultra-w-emmc-pico2) is merged in too, so a board can carry
+# its own rootfs customisations without affecting the other boards.
 # ---------------------------------------------------------------------------
-for ov in "$PLATFORM/overlay" "$CUSTOM/overlay"; do
+for ov in "$PLATFORM/overlay" "$PLATFORM/overlay-$TARGET" "$CUSTOM/overlay"; do
     [ -d "$ov" ] || continue
     msg "applying overlay $ov"
     rsync -a --chmod=u=rwX,go=rX --exclude .empty "$ov/" "$TARGET_DIR/"

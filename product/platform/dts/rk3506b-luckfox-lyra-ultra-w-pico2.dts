@@ -181,6 +181,19 @@
 	};
 };
 
+/**********spi (Pico 2 / spidev1.0)**********/
+&spi1 {
+	status = "okay";
+	pinctrl-names = "default";
+	/* csn1 (GPIO0_PA7 / RMIO7) deliberately left as GPIO */
+	pinctrl-0 = <&spi1_csn0_pins &spi1_clk_pins>;
+	spidev@0 {
+		compatible = "rockchip,spidev";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+	};
+};
+
 /**********pinctrl**********/
 &pinctrl {
 	lcd {

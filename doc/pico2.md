@@ -4,6 +4,22 @@ The Luckfox Lyra Ultra W can act as a **debugger** (bit-banged SWD over its RMIO
 header, driven by OpenOCD) **and** a **communication host** (SPI master) for an
 external Raspberry Pi Pico 2 (RP2350, Cortex-M33).
 
+This firmware is a **separate board variant** — `lyra-ultra-w-emmc-pico2`, a fork
+of the default `lyra-ultra-w-emmc` board config.  The default eMMC board does
+**not** include any of the pico2 bits (no spidev node, no openocd, no helpers).
+
+## Building the pico2 firmware
+
+```sh
+make build   BOARD=lyra-ultra-w-emmc-pico2     # full build -> out/firmware/
+make release BOARD=lyra-ultra-w-emmc-pico2     # full build + immutable RELEASE/ snapshot
+```
+
+The board config `config/boards/lyra-ultra-w-emmc-pico2.mk` is byte-for-byte the
+default emmc config except it selects the pico2 device tree and the pico2
+buildroot defconfig, and the board-scoped rootfs overlay is merged in at build
+time (see below).
+
 ## Wiring — Luckfox Lyra Ultra W ↔ Pico 2
 
 Both sides are **3.3 V** logic — no level shifting.  Power the Pico 2 from its
@@ -32,7 +48,7 @@ verify against the [Luckfox Lyra Pinout](https://wiki.luckfox.com/Luckfox-Lyra/P
 ## What the build provides
 
 - `/dev/spidev1.0` — SPI1 master on RMIO8/9/10/14 (1 MHz default), enabled in
-  the board device tree (`product/platform/dts/`).
+  the pico2 board device tree (`product/platform/dts/rk3506b-luckfox-lyra-ultra-w-pico2.dts`).
 - `openocd` — OpenOCD built with `--enable-sysfsgpio` and RP2350 target support
   (pinned snapshot `88b9bd396`, v0.12.0-1240).
 - `/etc/openocd/pico2.cfg` — SWD bit-bang on sysfs GPIO 41/42.
@@ -73,6 +89,10 @@ Notes:
   not the RP2350.
 - RP2350 flashing over bit-bang is slow (minutes) — fine for debugging/light
   flashing.
+- If the probe dies with `Require swclk and swdio gpio for SWD mode`, the
+  adapter block uses `adapter gpio swclk/swdio` — that syntax belongs to the
+  (uncompiled here) linuxgpiod driver.  This sysfsgpio build registers its own
+  commands: `sysfsgpio swclk_num <n>` / `sysfsgpio swdio_num <n>`.
 
 ## SPI communication
 
@@ -88,14 +108,44 @@ For a real two-way link, wire the SPI pins to a Pico 2 SPI slave and use
 `python3 -c 'import spidev; ...'` or any `/dev/spidev1.0` consumer.  `python3`
 and `python-spidev` are already in the rootfs.
 
+## Silicon revision (security)
+
+The well-known RP2350 secure-boot breaks target the **A2** stepping
+(`SYSINFO_CHIP_ID` = `0x20004927` — the DEF CON 2024 "RP2350 Hacking Challenge"
+chip).  Newer silicon is not affected.  Check a board over SWD:
+
+```sh
+# on the Lyra, with the Pico 2 wired:
+openocd -f /etc/openocd/pico2.cfg -c init -c halt \
+  -c 'mdw 0x40000000 1' -c 'mdw 0x00000010 1' -c shutdown
+```
+
+- `0x40000000` (SYSINFO_CHIP_ID): `0x30004927` → revision nibble `0x3` = **A3**
+  stepping (`0x2` = A2, the vulnerable one).
+- `0x00000013` (bootrom version byte): `0x04` → **bootrom v4**.  A3 hardware +
+  v4 bootrom is what the community calls the "A4" revision.
+
+The reference board used for this feature is **A3 + bootrom v4** — not the
+affected A2.
+
 ## How this is wired into the SDK
 
-- **Device tree** — `product/platform/dts/rk3506b-luckfox-lyra-ultra-w.dts` is
-  the board DTS with the `&spi1` spidev node; a FULL build copies it over the
-  vendored tree (see `stages/20-kernel/run.sh`).  To iterate on the DTS only:
-  `cp product/platform/dts/rk3506b-luckfox-lyra-ultra-w.dts vendor/rockchip/kernel/arch/arm/boot/dts/ && make kernel`.
-- **Buildroot** — `product/platform/configs/buildroot/rockchip_rk3506_luckfox_defconfig`
+All pico2 bits are scoped to the `lyra-ultra-w-emmc-pico2` board; the default
+`lyra-ultra-w-emmc` board keeps the plain DTS, a buildroot defconfig without
+openocd, and no pico2 scripts.
+
+- **Board config** — `config/boards/lyra-ultra-w-emmc-pico2.mk` (fork of the
+  default emmc config) selects `KERNEL_DTS := rk3506b-luckfox-lyra-ultra-w-pico2`
+  and `BUILDROOT_CFG := rockchip_rk3506_luckfox_pico2`.
+- **Device tree** — `product/platform/dts/rk3506b-luckfox-lyra-ultra-w-pico2.dts`
+  is the board DTS with the `&spi1` spidev node; a FULL build copies
+  `$KERNEL_DTS.dts` over the vendored tree (see `stages/20-kernel/run.sh`).  To
+  iterate on the DTS only:
+  `cp product/platform/dts/rk3506b-luckfox-lyra-ultra-w-pico2.dts vendor/rockchip/kernel/arch/arm/boot/dts/ && make kernel BOARD=lyra-ultra-w-emmc-pico2`.
+- **Buildroot** — `product/platform/configs/buildroot/rockchip_rk3506_luckfox_pico2_defconfig`
   enables `openocd` + sysfsgpio; the vendored buildroot's `openocd`/`jimtcl`
   packages were bumped for RP2350 support.
-- **Rootfs overlay** — the config/helper/demo above live in
-  `product/platform/rootfs/overlay/`.
+- **Rootfs overlay** — the config/helper/demo above live in the board-scoped
+  `product/platform/rootfs/overlay-lyra-ultra-w-emmc-pico2/`, merged in by
+  `product/platform/rootfs/post-rootfs.sh` (it applies `overlay-$TARGET` for the
+  active board in addition to the shared `overlay/`).
