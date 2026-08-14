@@ -95,6 +95,8 @@ make flash
 |---|---|---|---|
 | `lyra-sdmmc` / `lyra-spinand` | Lyra (RK3506G) | SD / NAND | `parameter-lyra-{sdmmc,spinand}.txt` |
 | `lyra-ultra-w-emmc` | Lyra Ultra W (RK3506B) | eMMC | `parameter-lyra-emmc.txt` |
+| `lyra-ultra-w-emmc-pico2` | Lyra Ultra W (RK3506B) | eMMC (+ Pico 2 debug) | `parameter-lyra-emmc.txt` |
+| `lyra-ultra-w-emmc-ab` | Lyra Ultra W (RK3506B) | eMMC (A/B dual-slot) | `parameter-lyra-emmc-ab.txt` |
 | `lyra-zero-w-sdmmc` / `lyra-zero-w-spinand` | Lyra Zero W (RK3506B) | SD / NAND | `parameter-lyra-sdmmc.txt` |
 
 The same core builds all Lyra variants; adding a board is a new small file in
@@ -135,6 +137,18 @@ RMIO header by OpenOCD** (sysfs GPIO 41/42, RP2350-capable snapshot), and
 (python-spidev is in the rootfs).  On the device: `pico2 info`, `pico2
 flash <img>`, `pico2-spi-demo.py`.  See `doc/pico2.md` for the exact wiring
 (Luckfox RMIO pins → Pico 2 SWD debug pads + SPI).
+
+## A/B (dual-slot) boot + OTA upgrade
+
+Upgrading the Lyra in place without bricking it is a **board variant**:
+build `BOARD=lyra-ultra-w-emmc-ab` (the default board is untouched).  It uses
+u-boot's native A/B slot boot (`CONFIG_ANDROID_AB`): u-boot and SPL keep slot
+metadata in a `misc` partition, boot the active slot, and **roll back
+automatically** if the new slot fails to boot (tries counter expires).  A
+shared `userdata` partition survives slot switches.  On the device:
+`abctl status` / `abctl set-other-active`, and `ota-update apply --rootfs
+rootfs.img` — the OTA CLI is web-callable (JSON) for a future upgrade UI.
+See `doc/ab-boot.md` for the full boot-flow / rollback / OTA diagrams.
 
 ## Recovering the device
 

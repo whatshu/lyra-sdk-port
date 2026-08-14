@@ -32,6 +32,20 @@ ships it at `vendor/rockchip/tools/linux/Linux_Upgrade_Tool/`.  You need
 write access to the Rockchip USB device node — either run as root, or
 install the udev rule from `tools/scripts/99-rockchip-usb.rules`.
 
+## A/B boards (`lyra-ultra-w-emmc-ab`)
+
+A/B `update.img` files carry the slot copies (`uboot_a/b`, `boot_a/b`,
+`system_a/b`) and the A/B metadata (`misc`), so they are flashed as a whole:
+
+```sh
+upgrade_tool uf update.img        # flashes every partition in the image
+```
+
+The `di -uboot/-b/-rootfs` flags and the `rkdeveloptool wlx` partition
+flags cannot address slot-suffixed partitions — always use `uf` (or
+`make flash BOARD=lyra-ultra-w-emmc-ab`, which picks the right mode).
+A fresh flash has slot **a** active; see `doc/ab-boot.md`.
+
 ## Partition-by-partition (rkdeveloptool)
 
 The open-source alternative, good for loader-mode boards:

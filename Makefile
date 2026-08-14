@@ -119,9 +119,23 @@ pico2:
 	@echo "  Build the board variant:  make build BOARD=lyra-ultra-w-emmc-pico2"
 	@echo "  ssh -p 10024 root@127.0.0.1   # then on the Lyra: pico2 info / pico2 flash <img>"
 
+.PHONY: ab
+ab:
+	@echo "A/B (dual-slot) boot + OTA upgrade — see doc/ab-boot.md"
+	@echo "  Build the board variant:  make build BOARD=lyra-ultra-w-emmc-ab"
+	@echo "  On the device:            abctl status / abctl set-other-active /"
+	@echo "                            ota-update apply --rootfs rootfs.img"
+
 # ---------------------------------------------------------------------------
 .PHONY: fmt
 fmt:
-	@python3 -m py_compile scripts/*.py && echo "python ok"
+	@PYTHONPYCACHEPREFIX="$$(mktemp -d)" python3 -m py_compile scripts/*.py \
+		tools/scripts/mkabmeta.py \
+		product/platform/rootfs/overlay-lyra-ultra-w-emmc-ab/usr/bin/abctl \
+		product/platform/rootfs/overlay-lyra-ultra-w-emmc-ab/usr/bin/ota-update \
+		&& echo "python ok"
 	@bash -n stages/*/run.sh device/rockchip/common/post-build.sh \
-		product/platform/rootfs/post-rootfs.sh tools/*.sh && echo "bash ok"
+		product/platform/rootfs/post-rootfs.sh tools/*.sh \
+		product/platform/rootfs/overlay-lyra-ultra-w-emmc-ab/etc/init.d/S10mount-userdata \
+		product/platform/rootfs/overlay-lyra-ultra-w-emmc-ab/etc/init.d/S99abctl \
+		&& echo "bash ok"

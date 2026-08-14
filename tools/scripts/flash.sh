@@ -71,6 +71,18 @@ timeout 30 "$UT" ul -noreset "$SDK_ROOT/out/firmware/MiniLoaderAll.bin" || {
     exit 1
 }
 
+# A/B boards (AB=1 in the board config) carry uboot_a/b, boot_a/b, system_a/b
+# and misc partitions that the di -uboot/-b/-rootfs flags cannot address, so
+# flash the whole update.img instead (upgrade_tool uf writes every partition
+# the image lists).
+if grep -qE '^\s*AB\s*(:=|=)\s*1\b' "$SDK_ROOT/config/boards/$BOARD.mk" 2>/dev/null; then
+    echo ">>> A/B board: flashing full update.img"
+    timeout 600 "$UT" uf "$IMG"
+    timeout 30 "$UT" rd
+    echo ">>> flash done"
+    exit 0
+fi
+
 # Write the partitions per the official rkflash.sh flow.
 P="$SDK_ROOT/out/firmware"
 timeout 60 "$UT" di -p "$P/parameter.txt"

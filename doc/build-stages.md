@@ -89,6 +89,12 @@ stage also xz-compresses it (`xz -T0 -6`, multi-threaded) into
 `out/firmware/update.img.xz` so the same build is cheap to archive/transfer
 (`make release` compresses its snapshot copies the same way).
 
+For **A/B boards** (`AB=1`, e.g. `lyra-ultra-w-emmc-ab`) the stage duplicates
+`uboot.img`/`boot.img`/`rootfs.img` into `uboot_a/b`, `boot_a/b` and
+`system_a/b`, generates `misc.img` carrying the initial `AvbABData`
+(`tools/scripts/mkabmeta.py`), and the `update.img` package-file lists all
+slot partitions plus `misc` (see `doc/ab-boot.md`).
+
 ## Partial build pitfalls
 
 `make rootfs` requires the kernel to have been built once (modules install).

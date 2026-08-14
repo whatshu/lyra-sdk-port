@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""ota-update — apply an OTA image to the inactive A/B slot.
+
+This is the upgrade entry point and is designed to be called by a future web
+UI: it prints JSON on stdout and logs progress on stderr, so an HTTP handler
+can just exec it.  It reuses abctl for slot metadata (same AvbABData source of
+truth u-boot uses), so the whole upgrade/rollback policy lives in one place.
+
+  ota-update status                 same JSON as `abctl status`
+  ota-update apply --rootfs f.img [--boot b.img] [--target a|b] [--dry-run]
+
+`apply` writes the images into the *inactive* slot (or --target), then promotes
+that slot (pri=15/tries=7) so the next reboot boots it.  A failed boot falls
+back automatically; `abctl set-other-active` reverts manually.
+
+The rootfs image must fit the 1 GiB system_<slot> partition and the boot image
+the 12 MiB boot_<slot> partition (see config/image/parameter-lyra-emmc-ab.txt).
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import sys
+
+_ABCTL = os.path.join(os.path.dirname(os.path.realpath(__file__)), "abctl")
+
+
+def _load_abctl():
+    """Import /usr/bin/abctl as a module (the file has no .py extension)."""
+    loader = importlib.machinery.SourceFileLoader("abctl", _ABCTL)
+    spec = importlib.util.spec_from_file_location("abctl", _ABCTL, loader=loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+abctl = _load_abctl()  # noqa: E402
+
+
+def _part_sectors(slot_part: str):
+    """Size of a GPT partition in bytes (from the on-disk partition table)."""
+    m = re.match(r"^(mmcblk\d+)p(\d+)$", os.path.basename(slot_part))
+    if not m:
+        return None
+    idx = int(m.group(2)) - 1
+    for i, _name, flba, llba, _u in abctl.gpt_partitions(f"/dev/{m.group(1)}"):
+        if i == idx:
+            return (llba - flba + 1) * 512
+    return None
+
+
+def _write_image(src: str, dst: str, dry_run: bool) -> None:
+    size = os.path.getsize(src)
+    cap = _part_sectors(dst)
+    if cap is not None and size > cap:
+        raise RuntimeError(f"{os.path.basename(src)} is {size} B, larger than "
+                           f"{os.path.basename(dst)} ({cap} B)")
+    if dry_run:
+        print(f">>> [dry-run] would write {os.path.basename(src)} "
+              f"({size} B) -> {dst}", file=sys.stderr)
+        return
+    print(f">>> writing {os.path.basename(src)} ({size} B) -> {dst}", file=sys.stderr)
+    with open(src, "rb") as fsrc, open(dst, "wb") as fdst:
+        while True:
+            chunk = fsrc.read(4 * 1024 * 1024)
+            if not chunk:
+                break
+            fdst.write(chunk)
+    os.sync()
+
+
+def cmd_status(_args) -> int:
+    print(json.dumps(abctl.load_status(), indent=2))
+    return 0
+
+
+def cmd_apply(args) -> int:
+    if not args.rootfs and not args.boot:
+        print(json.dumps({"ok": False, "error": "nothing to apply "
+                                                 "(give --rootfs and/or --boot)"}))
+        return 2
+
+    st = abctl.load_status()
+    if not st["metadata_valid"]:
+        print(json.dumps({"ok": False, "error": "misc metadata invalid/uninitialized"}))
+        return 1
+
+    if args.target:
+        target = args.target
+    else:
+        cur = st["current_slot"]
+        if cur not in ("a", "b"):
+            print(json.dumps({"ok": False, "error": "current slot unknown; pass --target a|b"}))
+            return 1
+        target = "b" if cur == "a" else "a"
+
+    part = st["slots"][target]["device"]
+    if not part:
+        print(json.dumps({"ok": False, "error": f"no device for slot {target}"}))
+        return 1
+    boot = abctl.find_partition(f"boot_{target}")
+    if args.boot and not boot:
+        print(json.dumps({"ok": False, "error": f"no boot_{target} partition"}))
+        return 1
+
+    jobs = [("rootfs", args.rootfs, part), ("boot", args.boot, boot)]
+
+    try:
+        for name, path, dev in jobs:
+            if path:
+                _write_image(path, dev, args.dry_run)
+    except (OSError, RuntimeError) as e:
+        print(json.dumps({"ok": False, "error": f"{e}"}))
+        return 1
+
+    if not args.dry_run:
+        abctl._activate(st["misc_device"], st["last_boot"], target)
+
+    print(json.dumps({
+        "ok": True,
+        "slot": target,
+        "dry_run": bool(args.dry_run),
+        "note": "reboot to boot the new slot; a failed boot rolls back",
+    }))
+    return 0
+
+
+def main(argv) -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("status", help="A/B status (same JSON as `abctl status`)")
+
+    sp = sub.add_parser("apply", help="write images into the inactive slot and promote it")
+    sp.add_argument("--rootfs", metavar="IMG", help="rootfs image (system_<slot>)")
+    sp.add_argument("--boot", metavar="IMG", help="boot image (boot_<slot>)")
+    sp.add_argument("--target", choices=("a", "b"), help="explicit slot (default: inactive)")
+    sp.add_argument("--dry-run", action="store_true", help="check only, write nothing")
+
+    args = ap.parse_args(argv)
+    return {"status": cmd_status, "apply": cmd_apply}[args.cmd](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
