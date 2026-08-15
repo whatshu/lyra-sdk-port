@@ -83,10 +83,35 @@ def make_release_dir(ctx, artifacts: list[Path]) -> Path:
     (release_dir / "firmware.txt").write_text(
         "\n".join(p.name for p in sorted(copied)) + "\n")
 
+    write_release_notes(ctx, release_dir)
+
     update_index(ctx, release_dir, xml)
 
     make_flash_tarball(ctx, fw_dir)
     return release_dir
+
+
+def write_release_notes(ctx, release_dir: Path) -> Path:
+    """Write RELEASE_NOTES.md ("what this image does", human-readable) into
+    the release directory.
+
+    The body comes from `config/release-notes/<target>.md` so a board can
+    carry its own description next to the machinery that ships it.  If the
+    template is absent a placeholder pointing at release.xml is written —
+    the manifest stays the source of truth for exact revisions.
+    """
+    notes = release_dir / "RELEASE_NOTES.md"
+    tmpl = ctx.root / "config" / "release-notes" / f"{ctx.target}.md"
+    if tmpl.is_file():
+        notes.write_text(tmpl.read_text().rstrip() + "\n")
+        info(f"release notes: {notes.relative_to(ctx.root)}")
+    else:
+        notes.write_text(
+            f"# {ctx.target}\n\n"
+            "No `config/release-notes/<target>.md` template yet — see "
+            "`release.xml` for the exact source revisions of this image.\n")
+        warn(f"no release-notes template for {ctx.target}; wrote placeholder")
+    return notes
 
 
 def make_flash_tarball(ctx, fw_dir: Path) -> Path:

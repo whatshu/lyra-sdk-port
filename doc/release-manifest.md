@@ -1,12 +1,17 @@
 # Releases
 
-`make release` produces an immutable, self-describing snapshot on disk:
+`make release` produces an immutable, self-describing snapshot on disk.
+`RELEASE_NOTES.md` in each release is copied from
+`config/release-notes/<target>.md` (a placeholder is written when a board has
+no template), so each board carries its own feature description next to the
+machinery that ships it:
 
 ```
 RELEASE/
 ├── index.xml                      # catalog of every release
 └── <target>-<YYYYmmdd-HHMMSS>/
     ├── release.xml                # manifest (below)
+    ├── RELEASE_NOTES.md           # human-readable "what this image does"
     ├── firmware.txt
     └── firmware/
         ├── MiniLoaderAll.bin
