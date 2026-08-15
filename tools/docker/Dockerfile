@@ -33,9 +33,12 @@ RUN if [ "$APT_MIRROR" != "archive.ubuntu.com" ]; then \
 
 # Host build tools.  These are the same ones the official SDK installs; the
 # pinned base image + recorded versions keep the set stable.
+# scons + gcc-arm-none-eabi build the AMP firmware (RT-Thread on cpu2 and the
+# M0 HAL responder); see doc/amp.md and stages/40-firmware/run.sh.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential make cmake ninja-build bison flex \
-        python3 perl pkg-config bc gawk patch gettext \
+        python3 perl pkg-config bc gawk patch gettext scons \
+        gcc-arm-none-eabi libnewlib-arm-none-eabi \
         device-tree-compiler lz4 xz-utils zstd cpio unzip zip rsync \
         kmod file e2fsprogs util-linux unifdef bsdmainutils \
         libssl-dev libelf-dev libgmp-dev libmpc-dev libmpfr-dev \

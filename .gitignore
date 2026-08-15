@@ -26,6 +26,22 @@
 /vendor/rockchip/u-boot/*_loader_*.bin
 /vendor/rockchip/u-boot/*idblock*.img
 
+# AMP firmware builds produce artifacts inside the sources (the rtos BSP builds
+# in-place via scons, the M0 responder via the HAL makefile); keep only sources
+# + the committed defconfig_cpu2 rtconfig.h.  The HAL tree's own lib/hal/src/*.o
+# are upstream prebuilts and stay tracked.
+/firmware/mcu/GCC/TestDemo.*
+/firmware/mcu/src/*.o
+/vendor/rockchip/rtos/bsp/rockchip/rk3506-32/build/
+/vendor/rockchip/rtos/bsp/rockchip/rk3506-32/.config
+/vendor/rockchip/rtos/bsp/rockchip/rk3506-32/.sconsign.dblite
+/vendor/rockchip/rtos/bsp/rockchip/rk3506-32/gcc_arm.ld
+/vendor/rockchip/rtos/bsp/rockchip/rk3506-32/rtthread.bin
+/vendor/rockchip/rtos/bsp/rockchip/rk3506-32/rtthread.elf
+/vendor/rockchip/rtos/bsp/rockchip/rk3506-32/rtthread.map
+/vendor/rockchip/rtos/bsp/rockchip/rk3506-32/Image/rtt*
+/vendor/rockchip/rtos/bsp/rockchip/rk3506-32/Image/*.img
+
 # Python
 __pycache__/
 *.pyc

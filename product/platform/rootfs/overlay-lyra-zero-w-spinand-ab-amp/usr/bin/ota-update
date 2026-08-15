@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""ota-update — apply an OTA image to the inactive A/B slot (NAND backend).
+
+Same CLI and JSON contract as the eMMC variant, but writes through mtd-utils
+(ubiformat / flash_erase / nandwrite) instead of raw block-device copies,
+because the boot/system slots live on SPI NAND:
+
+  - system_<slot> is a UBI image:  ubiformat -y -f <img> /dev/mtd<system_<slot>>
+    (ubiformat handles erase + bad blocks + the UBI superblock; the volume name
+    inside the image is `system`, which u-boot looks up as root=ubi0:system)
+  - boot_<slot>   is an Android boot image:  flash_erase the partition, then
+    nandwrite -p (pad the image with 0xFF to the erase-block boundary)
+
+mtd-utils (ubiformat/nandwrite/flash_erase) is part of this board's rootfs
+(BR2_PACKAGE_MTD=y, via fs/ubifs.config).  The target must be the *inactive*
+slot: the active slot is the one UBI is attached to at runtime (ubi.mtd=<N>
+from the boot cmdline), so writing it would race with the mounted rootfs.
+
+  ota-update status                 same JSON as `abctl status`
+  ota-update apply --rootfs f.ubi [--boot b.img] [--target a|b] [--dry-run]
+
+`apply` writes the images into the inactive slot (or --target), then promotes
+that slot (pri=15/tries=7) so the next reboot boots it.  A failed boot falls
+back automatically; `abctl set-other-active` reverts manually.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+
+_ABCTL = os.path.join(os.path.dirname(os.path.realpath(__file__)), "abctl")
+
+
+def _load_abctl():
+    """Import /usr/bin/abctl as a module (the file has no .py extension)."""
+    loader = importlib.machinery.SourceFileLoader("abctl", _ABCTL)
+    spec = importlib.util.spec_from_file_location("abctl", _ABCTL, loader=loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+abctl = _load_abctl()  # noqa: E402
+
+
+def _part_size(name: str):
+    """Size of a named MTD partition in bytes (from /proc/mtd), or None."""
+    return abctl.mtd_partitions().get(name, {}).get("size")
+
+
+def _check_size(src: str, part_name: str) -> None:
+    size = os.path.getsize(src)
+    cap = _part_size(part_name)
+    if cap is not None and size > cap:
+        raise RuntimeError(f"{os.path.basename(src)} is {size} B, larger than "
+                           f"{part_name} partition ({cap} B)")
+
+
+def _write_ubi(src: str, dev: str, dry_run: bool) -> None:
+    if dry_run:
+        print(f">>> [dry-run] would ubiformat -f {os.path.basename(src)} -> {dev}",
+              file=sys.stderr)
+        return
+    print(f">>> ubiformat {os.path.basename(src)} -> {dev}", file=sys.stderr)
+    subprocess.run(["ubiformat", "-y", "-f", src, dev], check=True)
+    os.sync()
+
+
+def _write_boot(src: str, dev: str, dry_run: bool) -> None:
+    if dry_run:
+        print(f">>> [dry-run] would flash_erase + nandwrite {os.path.basename(src)} "
+              f"-> {dev}", file=sys.stderr)
+        return
+    print(f">>> writing {os.path.basename(src)} -> {dev} (flash_erase + nandwrite)",
+          file=sys.stderr)
+    subprocess.run(["flash_erase", dev, "0", "0"], check=True)
+    subprocess.run(["nandwrite", "-p", dev, src], check=True)
+    os.sync()
+
+
+def cmd_status(_args) -> int:
+    print(json.dumps(abctl.load_status(), indent=2))
+    return 0
+
+
+def cmd_apply(args) -> int:
+    if not args.rootfs and not args.boot:
+        print(json.dumps({"ok": False, "error": "nothing to apply "
+                                                 "(give --rootfs and/or --boot)"}))
+        return 2
+
+    st = abctl.load_status()
+    if not st["metadata_valid"]:
+        print(json.dumps({"ok": False, "error": "misc metadata invalid/uninitialized"}))
+        return 1
+
+    if args.target:
+        target = args.target
+    else:
+        cur = st["current_slot"]
+        if cur not in ("a", "b"):
+            print(json.dumps({"ok": False, "error": "current slot unknown; pass --target a|b"}))
+            return 1
+        target = "b" if cur == "a" else "a"
+
+    sys_dev = abctl.mtd_partition(f"system_{target}")
+    boot_dev = abctl.mtd_partition(f"boot_{target}")
+    if not sys_dev:
+        print(json.dumps({"ok": False, "error": f"no system_{target} MTD partition"}))
+        return 1
+    if args.boot and not boot_dev:
+        print(json.dumps({"ok": False, "error": f"no boot_{target} MTD partition"}))
+        return 1
+
+    try:
+        if args.rootfs:
+            _check_size(args.rootfs, f"system_{target}")
+            _write_ubi(args.rootfs, sys_dev, args.dry_run)
+        if args.boot:
+            _check_size(args.boot, f"boot_{target}")
+            _write_boot(args.boot, boot_dev, args.dry_run)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as e:
+        print(json.dumps({"ok": False, "error": f"{e}"}))
+        return 1
+
+    if not args.dry_run:
+        abctl._activate(st["misc_device"], st["last_boot"], target)
+
+    print(json.dumps({
+        "ok": True,
+        "slot": target,
+        "dry_run": bool(args.dry_run),
+        "note": "reboot to boot the new slot; a failed boot rolls back",
+    }))
+    return 0
+
+
+def main(argv) -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("status", help="A/B status (same JSON as `abctl status`)")
+
+    sp = sub.add_parser("apply", help="write images into the inactive slot and promote it")
+    sp.add_argument("--rootfs", metavar="IMG", help="UBI image (system_<slot>)")
+    sp.add_argument("--boot", metavar="IMG", help="Android boot image (boot_<slot>)")
+    sp.add_argument("--target", choices=("a", "b"), help="explicit slot (default: inactive)")
+    sp.add_argument("--dry-run", action="store_true", help="check only, write nothing")
+
+    args = ap.parse_args(argv)
+    return {"status": cmd_status, "apply": cmd_apply}[args.cmd](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

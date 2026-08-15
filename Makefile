@@ -133,9 +133,17 @@ fmt:
 		tools/scripts/mkabmeta.py \
 		product/platform/rootfs/overlay-lyra-ultra-w-emmc-ab/usr/bin/abctl \
 		product/platform/rootfs/overlay-lyra-ultra-w-emmc-ab/usr/bin/ota-update \
+		product/platform/rootfs/overlay-lyra-ultra-w-emmc-ab-amp/usr/bin/abctl \
+		product/platform/rootfs/overlay-lyra-ultra-w-emmc-ab-amp/usr/bin/ota-update \
+		product/platform/rootfs/overlay-lyra-zero-w-spinand-ab-amp/usr/bin/abctl \
+		product/platform/rootfs/overlay-lyra-zero-w-spinand-ab-amp/usr/bin/ota-update \
 		&& echo "python ok"
 	@bash -n stages/*/run.sh device/rockchip/common/post-build.sh \
 		product/platform/rootfs/post-rootfs.sh tools/*.sh \
 		product/platform/rootfs/overlay-lyra-ultra-w-emmc-ab/etc/init.d/S10mount-userdata \
 		product/platform/rootfs/overlay-lyra-ultra-w-emmc-ab/etc/init.d/S99abctl \
+		product/platform/rootfs/overlay-lyra-ultra-w-emmc-ab-amp/etc/init.d/S10mount-userdata \
+		product/platform/rootfs/overlay-lyra-ultra-w-emmc-ab-amp/etc/init.d/S99abctl \
+		product/platform/rootfs/overlay-lyra-zero-w-spinand-ab-amp/etc/init.d/S10mount-userdata \
+		product/platform/rootfs/overlay-lyra-zero-w-spinand-ab-amp/etc/init.d/S99abctl \
 		&& echo "bash ok"

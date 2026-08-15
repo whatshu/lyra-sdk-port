@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""abctl — A/B (dual-slot) boot control for the Luckfox Lyra Ultra W (RK3506).
+
+Talks to the same on-disk slot metadata that u-boot uses (AvbABData, the 32-byte
+struct at byte offset 2048 of the ``misc`` GPT partition), so every operation
+here is exactly what u-boot will see on the next boot.  The struct layout matches
+u-boot's include/android_avb/avb_ab_flow.h; see doc/ab-boot.md.
+
+There is no udev on this rootfs, so partitions are found by parsing the GPT of
+each block device directly (a stable PARTUUID is written into the parameter file
+via the uuid: lines).
+
+Commands (all print JSON on stdout, logs on stderr — web-callable):
+
+  abctl status              current slot, per-slot state, active root partition
+  abctl mark-success        mark the booted slot successful (tries=0, succ=1)
+  abctl set-active <a|b>    make <slot> the active slot (pri=15/tries=7)
+  abctl set-other-active    promote the inactive slot (rollback)
+  abctl find-part <name>    resolve a GPT partition name to a /dev node
+  abctl ensure-userdata     format (if needed) + mount the shared userdata
+
+The policy is the "successful_boot" model: a freshly activated slot boots with
+tries_remaining=7 and must be marked successful (S99abctl does this once the
+system is up) or it expires and u-boot falls back to the other slot.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import re
+import struct
+import subprocess
+import sys
+import zlib
+
+AB_MAGIC = b"\x00AB0"
+AB_METADATA_OFFSET = 2048
+MAX_PRIORITY = 15
+MAX_TRIES = 7
+GPT_SIGNATURE = b"EFI PART"
+EXT4_MAGIC = b"\x53\xef"          # 0xEF53 LE, at partition offset 1080
+USERDATA_MP = "/userdata"
+
+
+# --------------------------------------------------------------------------
+# GPT access (no udev: /dev/disk/by-partlabel does not exist on this rootfs)
+# --------------------------------------------------------------------------
+def _read_block(dev: str, offset: int, size: int) -> bytes:
+    with open(dev, "rb") as f:
+        f.seek(offset)
+        return f.read(size)
+
+
+def gpt_partitions(dev: str):
+    """Parse a GPT and return [(index0, name, first_lba, last_lba, part_uuid)]."""
+    try:
+        hdr = _read_block(dev, 512, 92)
+    except OSError:
+        return []
+    if hdr[:8] != GPT_SIGNATURE:
+        return []
+    parts_lba = struct.unpack_from("<Q", hdr, 0x48)[0]
+    num = struct.unpack_from("<I", hdr, 0x50)[0]
+    esz = struct.unpack_from("<I", hdr, 0x54)[0]
+    if not (1 <= num <= 128) or not (128 <= esz <= 512):
+        return []
+    arr = _read_block(dev, parts_lba * 512, num * esz)
+    out = []
+    for i in range(num):
+        e = arr[i * esz:(i + 1) * esz]
+        if len(e) < 128:
+            break
+        if e[0:16] == b"\x00" * 16:        # unused entry
+            continue
+        name = e[0x38:0x38 + 72].decode("utf-16-le", errors="replace").rstrip("\x00")
+        flba = struct.unpack_from("<Q", e, 0x20)[0]
+        llba = struct.unpack_from("<Q", e, 0x28)[0]
+        out.append((i, name, flba, llba, e[0x10:0x20]))
+    return out
+
+
+def find_partition(name: str):
+    """Return the /dev node of GPT partition ``name`` on any /dev/mmcblk*."""
+    for dev in sorted(glob.glob("/dev/mmcblk[0-9]*")):
+        m = re.match(r"^/dev/mmcblk(\d+)$", dev)   # whole disks only
+        if not m:
+            continue
+        for idx, pname, *_ in gpt_partitions(dev):
+            if pname == name:
+                return f"/dev/mmcblk{m.group(1)}p{idx + 1}"
+    return None
+
+
+# --------------------------------------------------------------------------
+# AvbABData (u-boot A/B metadata, 32 bytes big-endian at misc+2048)
+# --------------------------------------------------------------------------
+def build_abdata(slots, last_boot: int = 0) -> bytes:
+    (pa, ta, sa), (pb, tb, sb) = slots
+    head = struct.pack(">4sBB2s", AB_MAGIC, 1, 0, b"\x00\x00")
+    body = head + struct.pack(">4B4B", pa, ta, sa, 0, pb, tb, sb, 0)
+    body += struct.pack(">B", last_boot) + b"\x00" * 11
+    assert len(body) == 28
+    return body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+
+def read_abdata(misc_dev: str):
+    """Return (slots, last_boot, valid).  slots = ((p,t,s),(p,t,s))."""
+    with open(misc_dev, "rb") as f:
+        f.seek(AB_METADATA_OFFSET)
+        data = f.read(32)
+    if len(data) < 32 or data[:4] != AB_MAGIC:
+        return ((0, 0, 0), (0, 0, 0)), 0, False
+    (_magic, _maj, _min, _r1,
+     pa, ta, sa, _ra, pb, tb, sb, _rb, last_boot, _r2, crc) = \
+        struct.unpack(">4sBB2s4B4BB11sI", data)
+    valid = crc == (zlib.crc32(data[:28]) & 0xFFFFFFFF)
+    return ((pa, ta, sa), (pb, tb, sb)), last_boot, valid
+
+
+def write_abdata(misc_dev: str, slots, last_boot: int = 0) -> None:
+    blob = build_abdata(slots, last_boot)
+    with open(misc_dev, "r+b") as f:
+        f.seek(AB_METADATA_OFFSET)
+        f.write(blob)
+        f.flush()
+    os.sync()
+
+
+def slot_is_bootable(slot) -> bool:
+    p, t, succ = slot
+    return bool(p > 0 and (succ != 0 or t > 0))
+
+
+# --------------------------------------------------------------------------
+# Status
+# --------------------------------------------------------------------------
+def current_slot():
+    """Read the booted slot from /proc/cmdline (androidboot.slot_suffix)."""
+    try:
+        cmd = open("/proc/cmdline").read()
+    except OSError:
+        return None
+    m = re.search(r"androidboot\.slot_suffix=_(a|b)", cmd)
+    return m.group(1) if m else None
+
+
+def _fmt_uuid(b: bytes) -> str:
+    if len(b) != 16:
+        return ""
+    return "-".join([
+        b[0:4].hex(), b[4:6].hex(), b[6:8].hex(), b[8:10].hex(), b[10:16].hex(),
+    ])
+
+
+def load_status() -> dict:
+    """Assemble the status JSON (also used by ota-update and the web layer)."""
+    misc = find_partition("misc")
+    if misc:
+        slots, last_boot, valid = read_abdata(misc)
+    else:
+        slots, last_boot, valid = ((0, 0, 0), (0, 0, 0)), 0, False
+    cur = current_slot()
+
+    sys_a, sys_b = find_partition("system_a"), find_partition("system_b")
+    parts = {"a": sys_a, "b": sys_b}
+
+    # Active root from /proc/cmdline
+    root = None
+    try:
+        m = re.search(r"root=PARTUUID=([0-9a-fA-F-]+)", open("/proc/cmdline").read())
+        if m:
+            root = m.group(1)
+    except OSError:
+        pass
+
+    return {
+        "current_slot": cur,
+        "metadata_valid": valid,
+        "misc_device": misc,
+        "last_boot": last_boot,
+        "slots": {
+            "a": {
+                "priority": slots[0][0], "tries_remaining": slots[0][1],
+                "successful_boot": slots[0][2], "bootable": slot_is_bootable(slots[0]),
+                "device": parts["a"], "partuuid": None,
+            },
+            "b": {
+                "priority": slots[1][0], "tries_remaining": slots[1][1],
+                "successful_boot": slots[1][2], "bootable": slot_is_bootable(slots[1]),
+                "device": parts["b"], "partuuid": None,
+            },
+        },
+        "root": root,
+    }
+
+
+def _out(d: dict) -> None:
+    print(json.dumps(d, indent=2))
+
+
+# --------------------------------------------------------------------------
+# Commands
+# --------------------------------------------------------------------------
+def cmd_status(_args) -> int:
+    _out(load_status())
+    return 0
+
+
+def cmd_mark_success(_args) -> int:
+    st = load_status()
+    if not st["metadata_valid"]:
+        print(json.dumps({"ok": False, "error": "misc metadata invalid/uninitialized"}))
+        return 1
+    cur = st["current_slot"]
+    if cur not in ("a", "b"):
+        print(json.dumps({"ok": False, "error": "current slot unknown (no androidboot.slot_suffix in cmdline)"}))
+        return 1
+    slots = (st["slots"]["a"], st["slots"]["b"])
+    slot = slots[0] if cur == "a" else slots[1]
+    if not slot["bootable"]:
+        print(json.dumps({"ok": False, "error": f"slot {cur} is not bootable, refusing to mark success"}))
+        return 1
+    if slot["successful_boot"]:
+        print(json.dumps({"ok": True, "slot": cur, "already": True}))   # idempotent
+        return 0
+    # Mirror u-boot's avb_ab_mark_slot_successful: tries_remaining=0, successful=1
+    new = [(slots[0]["priority"], slots[0]["tries_remaining"], slots[0]["successful_boot"]),
+           (slots[1]["priority"], slots[1]["tries_remaining"], slots[1]["successful_boot"])]
+    new[0 if cur == "a" else 1] = (slot["priority"], 0, 1)
+    write_abdata(st["misc_device"], (tuple(new[0]), tuple(new[1])), st["last_boot"])
+    print(json.dumps({"ok": True, "slot": cur, "tries_remaining": 0, "successful_boot": 1}))
+    return 0
+
+
+def _activate(misc_dev, last_boot, target: str) -> None:
+    """Promote ``target`` to active (pri=15/tries=7/succ=0), other to pri=14."""
+    slots = [(MAX_PRIORITY, MAX_TRIES, 0), (MAX_PRIORITY - 1, MAX_TRIES, 0)]
+    if target == "b":
+        slots.reverse()
+    write_abdata(misc_dev, tuple(slots), last_boot)
+
+
+def cmd_set_active(args) -> int:
+    st = load_status()
+    if not st["metadata_valid"]:
+        print(json.dumps({"ok": False, "error": "misc metadata invalid/uninitialized"}))
+        return 1
+    _activate(st["misc_device"], st["last_boot"], args.slot)
+    print(json.dumps({"ok": True, "active": args.slot, "note": "reboot to apply"}))
+    return 0
+
+
+def cmd_set_other_active(_args) -> int:
+    st = load_status()
+    cur = st["current_slot"]
+    if cur not in ("a", "b"):
+        print(json.dumps({"ok": False, "error": "current slot unknown"}))
+        return 1
+    if not st["metadata_valid"]:
+        print(json.dumps({"ok": False, "error": "misc metadata invalid/uninitialized"}))
+        return 1
+    target = "b" if cur == "a" else "a"
+    _activate(st["misc_device"], st["last_boot"], target)
+    print(json.dumps({"ok": True, "active": target, "note": "reboot to apply"}))
+    return 0
+
+
+def cmd_find_part(args) -> int:
+    dev = find_partition(args.name)
+    print(json.dumps({"name": args.name, "device": dev}))
+    return 0 if dev else 1
+
+
+def cmd_ensure_userdata(_args) -> int:
+    dev = find_partition("userdata")
+    if not dev:
+        print(json.dumps({"ok": False, "error": "userdata partition not found"}))
+        return 1
+    # already mounted?
+    try:
+        mounts = open("/proc/mounts").read()
+        if re.search(rf"^{dev}\s+{re.escape(USERDATA_MP)}", mounts, re.M):
+            print(json.dumps({"ok": True, "device": dev, "mounted": USERDATA_MP}))
+            return 0
+    except OSError:
+        pass
+    # has a filesystem yet?  ext4 superblock magic at absolute offset 1080.
+    try:
+        with open(dev, "rb") as f:
+            f.seek(1080)
+            magic = f.read(2)
+    except OSError as e:
+        print(json.dumps({"ok": False, "error": f"cannot read {dev}: {e}"}))
+        return 1
+    if magic != EXT4_MAGIC:
+        print(f">>> formatting {dev} (ext4)", file=sys.stderr)
+        r = subprocess.run(["mkfs.ext4", "-F", "-L", "userdata", dev])
+        if r.returncode != 0:
+            print(json.dumps({"ok": False, "error": "mkfs.ext4 failed"}))
+            return 1
+    os.makedirs(USERDATA_MP, exist_ok=True)
+    r = subprocess.run(["mount", "-t", "ext4", dev, USERDATA_MP])
+    if r.returncode != 0:
+        print(json.dumps({"ok": False, "error": f"mount {dev} failed"}))
+        return 1
+    print(json.dumps({"ok": True, "device": dev, "mounted": USERDATA_MP}))
+    return 0
+
+
+def main(argv) -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("status", help="show slot state (JSON)")
+    sub.add_parser("mark-success", help="mark the booted slot successful")
+    sp = sub.add_parser("set-active", help="make a slot active (reboot applies)")
+    sp.add_argument("slot", choices=("a", "b"))
+    sub.add_parser("set-other-active", help="promote the inactive slot (rollback)")
+    sp = sub.add_parser("find-part", help="resolve a GPT partition name")
+    sp.add_argument("name")
+    sub.add_parser("ensure-userdata", help="format (if needed) + mount /userdata")
+
+    args = ap.parse_args(argv)
+    return {"status": cmd_status,
+            "mark-success": cmd_mark_success,
+            "set-active": cmd_set_active,
+            "set-other-active": cmd_set_other_active,
+            "find-part": cmd_find_part,
+            "ensure-userdata": cmd_ensure_userdata,
+            }[args.cmd](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

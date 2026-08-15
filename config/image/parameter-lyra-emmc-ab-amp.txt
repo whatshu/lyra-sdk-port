@@ -1,0 +1,26 @@
+FIRMWARE_VER:8.1
+MACHINE_MODEL:RK3506
+MACHINE_ID:007
+MANUFACTURER: RK3506
+MAGIC: 0x5041524B
+ATAG: 0x00200800
+MACHINE: 3506
+CHECK_MASK: 0x80
+PWR_HLD: 0,0,A,0,1
+TYPE: GPT
+# A/B (dual-slot) + AMP layout — sizes/offsets in 512-byte sectors.
+# This is parameter-lyra-emmc-ab.txt plus an `amp` partition (the amp.img FIT
+# that u-boot loads with CONFIG_AMP/CONFIG_ROCKCHIP_AMP: RT-Thread on cpu2 +
+# M0 HAL), inserted between boot_b and system_a.
+#   uboot_a/b  : SPL + u-boot FIT (slot copies)
+#   misc       : AvbABData slot metadata (u-boot A/B state, offset 2048)
+#   boot_a/b   : Android boot images (kernel + dtb), slot copies
+#   amp        : amp.img FIT (RT-Thread on cpu2 + M0 HAL), loaded by u-boot
+#   system_a/b : rootfs (ext4), slot copies — u-boot injects root=PARTUUID
+#   userdata   : shared runtime data, persists across slot switches
+# The uuid: lines give the GPT partitions stable PARTUUIDs so u-boot can
+# select the rootfs of the booted slot (ab_update_root_partition).
+CMDLINE: mtdparts=rk29xxnand:0x00002000@0x00002000(uboot_a),0x00002000@0x00004000(uboot_b),0x00002000@0x00006000(misc),0x00006000@0x00008000(boot_a),0x00006000@0x0000e000(boot_b),0x00002000@0x00014000(amp),0x00200000@0x00016000(system_a),0x00200000@0x00216000(system_b),-@0x00416000(userdata:grow)
+uuid:system_a=f372dce4-9709-4369-a621-a45d045ad9c7
+uuid:system_b=d7891b4a-7115-4ca8-bd65-19d775fed905
+uuid:userdata=c4b4adf2-970d-4bae-8f3c-e81d1ed2a122

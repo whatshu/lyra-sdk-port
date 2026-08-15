@@ -1,0 +1,31 @@
+#!/bin/sh
+# Mark the booted A/B slot successful once the system is up.
+#
+# u-boot (CONFIG_ANDROID_AB) decrements tries_remaining on every boot of a
+# slot that has not been marked successful.  Reaching this late init script
+# means the slot demonstrably boots; marking it successful (tries=0, succ=1)
+# stops the countdown and is idempotent.  A slot whose boot keeps failing
+# before userspace runs never gets marked and expires -> u-boot falls back
+# to the other slot.
+#
+# See doc/ab-boot-nand.md.
+#
+# Only act on `start`: init runs us via rcS (`S99abctl start`) and shutdown via
+# rcK (`S99abctl stop`).  Marking at shutdown would credit a slot for merely
+# reaching init and being rebooted — a soft reboot must never count as a
+# successful boot, or the tries_remaining countdown (and with it the automatic
+# rollback) loses its meaning.
+case "$1" in
+	start)
+		[ -x /usr/bin/abctl ] || exit 0
+		abctl mark-success >/dev/null 2>&1 || true
+		;;
+	stop|restart|reload)
+		# Marking happens only on boot; nothing to do on shutdown.
+		;;
+	*)
+		echo "Usage: $0 {start|stop}" >&2
+		exit 1
+		;;
+esac
+exit 0

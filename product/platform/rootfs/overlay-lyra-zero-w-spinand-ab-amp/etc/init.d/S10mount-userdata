@@ -1,0 +1,10 @@
+#!/bin/sh
+# Mount the shared A/B userdata partition (the external TF card).  On the very
+# first boot the partition has no filesystem, so it is formatted (ext4) once;
+# afterwards it persists across slot switches (mount point /userdata, also
+# reachable as /data).  Requires python3 + e2fsprogs, both in this board's
+# rootfs.
+#
+# See doc/ab-boot-nand.md.
+[ -x /usr/bin/abctl ] || exit 0
+abctl ensure-userdata >/dev/null 2>&1 || true

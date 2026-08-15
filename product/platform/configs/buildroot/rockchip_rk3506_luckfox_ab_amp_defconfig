@@ -1,0 +1,41 @@
+# A/B + AMP board rootfs config for the Lyra Zero W (SPI NAND) — slim core.
+#
+# The full rockchip_rk3506_luckfox defconfig produces a ~130 MB UBIFS image,
+# which cannot fit two A/B system slots (96 MB each) on the 256 MB NAND.  This
+# is the "slim core" the user approved: the media stack (ffmpeg, rkadk, rga,
+# lvgl, python-pillow), pulseaudio, vim and the python package ecosystem are
+# dropped; the board keeps what it needs to boot, talk over the USB gadget
+# (dnsmasq + openssh), run the A/B tooling (python3) and format the TF-card
+# userdata (e2fsprogs).  mtd-utils (ubiformat/nandwrite/flash_erase) comes in
+# via fs/ubifs.config.
+#
+# A/B specifics (see config/image/parameter-lyra-spinand-ab-amp.txt):
+#   - the rootfs is built as a UBI image whose volume is named `system`
+#     (u-boot's ab_update_root_partition() hard-codes root=ubi0:system) ->
+#     BR2_TARGET_ROOTFS_UBI_USE_CUSTOM_CONFIG points at fs/ubi/ubinize-ab.cfg
+#     (stages/30-rootfs/run.sh copies config/image/ubinize-ab.cfg there).
+#   - e2fsprogs formats the shared TF-card `userdata` partition on first boot.
+#include "base/base.config"
+#include "fs/ubifs.config"
+#include "fs/e2fs.config"
+BR2_PACKAGE_DNSMASQ=y
+BR2_PACKAGE_IPROUTE2=y
+BR2_PACKAGE_LIBCURL=y
+BR2_PACKAGE_OPENSSH=y
+BR2_PACKAGE_OPENSSH_GEN_KEYS=y
+BR2_PACKAGE_PYTHON3=y
+BR2_PACKAGE_RK3506=y
+BR2_PACKAGE_RKWIFIBT_APP=y
+BR2_PACKAGE_UTIL_LINUX_AGETTY=y
+BR2_PACK_EXTRA_TARGET=y
+BR2_TARGET_GENERIC_HOSTNAME="luckfox"
+BR2_TARGET_GENERIC_ISSUE="Welcome to Luckfox Lyra [root:luckfox]"
+# BR2_TARGET_GENERIC_REMOUNT_ROOTFS_RW is not set
+BR2_TARGET_GENERIC_ROOT_PASSWD="luckfox"
+BR2_TARGET_ROOTFS_UBI_UBIFS=y
+BR2_TARGET_ROOTFS_UBI_USE_CUSTOM_CONFIG=y
+BR2_TARGET_ROOTFS_UBI_CUSTOM_CONFIG_FILE="fs/ubi/ubinize-ab.cfg"
+BR2_TARGET_SERIAL_SHELL_GETTY=y
+BR2_TIME_BITS_64=y
+BR2_arm=y
+BR2_cortex_a7=y

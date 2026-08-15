@@ -30,6 +30,21 @@ if [ "$FULL" = "1" ]; then
             fi
         done
     done
+
+    # A/B boards use a custom ubinize config (UBI volume named `system`, which
+    # u-boot's ab_update_root_partition() looks up as root=ubi0:system).  The
+    # defconfig references it as fs/ubi/ubinize-ab.cfg; stage the SDK's copy
+    # into the vendored buildroot so that path resolves.
+    if grep -q 'BR2_TARGET_ROOTFS_UBI_CUSTOM_CONFIG_FILE' \
+            "configs/${BUILDROOT_CFG}_defconfig" 2>/dev/null; then
+        src="$SDK_ROOT/config/image/ubinize-ab.cfg"
+        if [ -f "$src" ]; then
+            cp -f "$src" fs/ubi/ubinize-ab.cfg
+        else
+            echo "ERROR: $src missing (custom ubinize config)" >&2
+            exit 1
+        fi
+    fi
 fi
 
 if [ "$FULL" = "1" ] || [ ! -f "$BR_OUT/.config" ]; then

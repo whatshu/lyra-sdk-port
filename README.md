@@ -97,7 +97,9 @@ make flash
 | `lyra-ultra-w-emmc` | Lyra Ultra W (RK3506B) | eMMC | `parameter-lyra-emmc.txt` |
 | `lyra-ultra-w-emmc-pico2` | Lyra Ultra W (RK3506B) | eMMC (+ Pico 2 debug) | `parameter-lyra-emmc.txt` |
 | `lyra-ultra-w-emmc-ab` | Lyra Ultra W (RK3506B) | eMMC (A/B dual-slot) | `parameter-lyra-emmc-ab.txt` |
+| `lyra-ultra-w-emmc-ab-amp` | Lyra Ultra W (RK3506B) | eMMC (A/B + AMP) | `parameter-lyra-emmc-ab-amp.txt` |
 | `lyra-zero-w-sdmmc` / `lyra-zero-w-spinand` | Lyra Zero W (RK3506B) | SD / NAND | `parameter-lyra-sdmmc.txt` |
+| `lyra-zero-w-spinand-ab-amp` | Lyra Zero W (RK3506B) | SPI NAND (A/B + AMP), TF data | `parameter-lyra-spinand-ab-amp.txt` |
 
 The same core builds all Lyra variants; adding a board is a new small file in
 `config/boards/`.
@@ -149,6 +151,25 @@ shared `userdata` partition survives slot switches.  On the device:
 `abctl status` / `abctl set-other-active`, and `ota-update apply --rootfs
 rootfs.img` — the OTA CLI is web-callable (JSON) for a future upgrade UI.
 See `doc/ab-boot.md` for the full boot-flow / rollback / OTA diagrams.
+
+## A/B boot on SPI NAND (Lyra Zero W)
+
+The **Lyra Zero W** (no eMMC) runs the same A/B machinery on its onboard
+256 MB SPI NAND: the two `system_a/b` slots are **UBI volumes** named `system`
+(u-boot injects `ubi.mtd=<N> root=ubi0:system`), a single `uboot` slot, and
+the TF card is data-only (`userdata`, mounted at `/userdata`).  Build
+`BOARD=lyra-zero-w-spinand-ab-amp`; `abctl` / `ota-update` have MTD backends
+(ubiformat / nandwrite / a bad-block-aware misc read-modify-write).  See
+`doc/ab-boot-nand.md`.
+
+## AMP (3rd Cortex-A7 RT-Thread + Cortex-M0)
+
+The AMP boards (`lyra-ultra-w-emmc-ab-amp`, `lyra-zero-w-spinand-ab-amp`)
+release the RK3506's extra cores at boot: u-boot loads an `amp.img` FIT from
+the `amp` partition and starts RT-Thread on the 3rd Cortex-A7 (PSCI) plus a
+bare-metal rpmsg responder on the Cortex-M0 (TEE SRAM release).  Linux sees
+the M0 as `/dev/ttyRPMSG0`; `m0ping` does the Linux↔M0 ping-pong with RTT
+stats.  See `doc/amp.md`.
 
 ## Recovering the device
 

@@ -1,0 +1,31 @@
+FIRMWARE_VER:8.1
+MACHINE_MODEL:RK3506
+MACHINE_ID:007
+MANUFACTURER: RK3506
+MAGIC: 0x5041524B
+ATAG: 0x00200800
+MACHINE: 3506
+CHECK_MASK: 0x80
+PWR_HLD: 0,0,A,0,1
+TYPE: GPT
+# A/B (dual-slot) layout on SPI NAND — sizes/offsets in 512-byte sectors
+# (256 MB = 0x80000 sectors).  The loader writes a GPT for TYPE:GPT the same
+# way it does on eMMC, so u-boot's EFI partition driver serves the table on
+# both SPL and u-boot proper (no rkparm needed; CONFIG_SPL_EFI_PARTITION=y).
+# SPL loads the single `uboot` slot (slot-suffix lookup falls back to the
+# plain name); A/B is carried by boot_a/b + system_a/b.  `misc` is never
+# slot-suffixed and holds AvbABData @ byte 2048.
+#
+#   uboot     : SPL + u-boot FIT (single slot; start offset 4 MB must match
+#               what SPL's part_get_info_by_name("uboot") returns)
+#   misc      : AvbABData slot metadata (u-boot A/B state, offset 2048)
+#   boot_a/b  : Android boot images (kernel + dtb), slot copies
+#   amp       : amp.img FIT (RT-Thread on cpu2 + M0 HAL), loaded by u-boot
+#   system_a/b: rootfs.ubi (UBI volume named `system`), slot copies — u-boot
+#               injects ubi.mtd=<part_num-1> root=ubi0:system
+#   spare     : reserved (grow)
+#
+# Kernel mtd numbering follows the table order (no master node on spi-nand):
+# mtd0=uboot mtd1=misc mtd2=boot_a mtd3=boot_b mtd4=amp mtd5=system_a
+# mtd6=system_b mtd7=spare.
+CMDLINE:mtdparts=:0x00004000@0x00002000(uboot),0x00002000@0x00006000(misc),0x00006000@0x00008000(boot_a),0x00006000@0x0000e000(boot_b),0x00002000@0x00014000(amp),0x00030000@0x00016000(system_a),0x00030000@0x00046000(system_b),-@0x00076000(spare:grow)

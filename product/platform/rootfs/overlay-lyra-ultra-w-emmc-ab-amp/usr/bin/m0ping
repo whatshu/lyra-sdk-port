@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""m0ping — synchronous ping-pong between Linux and the Cortex-M0.
+
+The M0 runs a bare-metal virtio-rpmsg responder (firmware/mcu) that Linux sees
+as /dev/ttyRPMSG0 (rpmsg_tty).  Each round writes "ping" and waits for the M0's
+"pong" reply, measuring the round-trip time.  JSON stats on stdout, logs on
+stderr — consistent with abctl/ota-update.
+
+Usage:
+
+  m0ping [--count N] [--timeout T] [--dev /dev/ttyRPMSG0]
+
+The device node only appears after the AMP firmware is up and the M0 has
+announced its endpoint, so m0ping retries the open for a few seconds.
+"""
+
+import argparse
+import json
+import os
+import select
+import statistics
+import sys
+import termios
+import time
+
+DEFAULT_DEV = "/dev/ttyRPMSG0"
+
+
+def open_tty(path: str, timeout: float) -> int:
+    """Open the rpmsg tty in raw mode; retry briefly while the node appears."""
+    fd = None
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_NOCTTY)
+            break
+        except FileNotFoundError:
+            time.sleep(0.2)
+        except OSError as e:
+            print(f"m0ping: {path}: {e}", file=sys.stderr)
+            return -1
+    if fd is None:
+        print(f"m0ping: {path}: not available after {timeout:.0f}s", file=sys.stderr)
+        return -1
+
+    # Raw mode: the M0's "pong" has no newline, so a canonical read would block.
+    try:
+        attrs = termios.tcgetattr(fd)
+        attrs[3] &= ~(termios.ICANON | termios.ECHO | termios.ISIG)
+        attrs[6][termios.VMIN] = 1
+        attrs[6][termios.VTIME] = 0
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    except termios.error:
+        pass  # rpmsg tty has no termios ops; the raw tty read path still works
+    return fd
+
+
+def round_trip(fd: int, timeout: float) -> float | None:
+    """One ping->pong round.  Returns RTT seconds, or None on timeout."""
+    start = time.monotonic()
+    if os.write(fd, b"ping") != 4:
+        return None
+    # Read until we have "pong" (may arrive in fragments).
+    got = b""
+    while len(got) < 4:
+        r, _, _ = select.select([fd], [], [], timeout)
+        if not r:
+            return None
+        chunk = os.read(fd, 4 - len(got))
+        if not chunk:
+            return None
+        got += chunk
+    if got != b"pong":
+        print(f"m0ping: unexpected reply {got!r}", file=sys.stderr)
+        return None
+    return time.monotonic() - start
+
+
+def main(argv) -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--count", type=int, default=100, help="rounds (default 100)")
+    ap.add_argument("--timeout", type=float, default=0.5,
+                    help="per-round reply timeout seconds (default 0.5)")
+    ap.add_argument("--open-timeout", type=float, default=10.0,
+                    help="seconds to wait for the device node (default 10)")
+    ap.add_argument("--dev", default=DEFAULT_DEV, help=f"rpmsg tty (default {DEFAULT_DEV})")
+    args = ap.parse_args(argv)
+
+    if args.count <= 0:
+        print("m0ping: --count must be > 0", file=sys.stderr)
+        return 2
+
+    fd = open_tty(args.dev, args.open_timeout)
+    if fd < 0:
+        return 1
+
+    rtts: list[float] = []
+    lost = 0
+    for i in range(args.count):
+        rtt = round_trip(fd, args.timeout)
+        if rtt is None:
+            lost += 1
+            print(f"m0ping: round {i + 1}/{args.count}: timeout", file=sys.stderr)
+        else:
+            rtts.append(rtt)
+        if i + 1 < args.count:
+            time.sleep(0.01)  # small gap so the M0's ring never fills
+
+    os.close(fd)
+
+    stats = {
+        "device": args.dev,
+        "rounds": args.count,
+        "ok": len(rtts),
+        "lost": lost,
+    }
+    if rtts:
+        us = [r * 1e6 for r in rtts]
+        us.sort()
+        stats["rtt_us"] = {
+            "min": round(us[0], 1),
+            "avg": round(statistics.fmean(us), 1),
+            "max": round(us[-1], 1),
+            "p50": round(us[len(us) * 50 // 100], 1),
+            "p99": round(us[len(us) * 99 // 100], 1),
+        }
+    print(json.dumps(stats))
+    return 0 if lost == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,74 @@
+/* SPDX-License-Identifier: BSD-3-Clause */
+/*
+ * Copyright (c) 2026 shu-sdk contributors
+ *
+ * AMP FIT for the shu-sdk boards.  Combines the two firmware images u-boot
+ * releases when CONFIG_ROCKCHIP_AMP is set:
+ *
+ *   amp2   type=firmware   RT-Thread on the 3rd Cortex-A7 (cpu@f02), loaded
+ *                          at 0x03e00000 and started via PSCI smc_cpu_on
+ *   mcu    type=standalone bare-metal rpmsg responder on the Cortex-M0,
+ *                          loaded at 0xfff84000 and released by the TEE
+ *
+ * The firmware stage (stages/40-firmware/run.sh) stages the built binaries
+ * next to this ITS as amp2.bin / mcu.bin and runs:
+ *   mkimage -f amp.its -E -p 0xe00 amp.img
+ *
+ * See doc/amp.md.
+ */
+
+/dts-v1/;
+/ {
+	description = "Rockchip AMP FIT Image";
+	#address-cells = <1>;
+
+	images {
+		amp2 {
+			description  = "rtos-core2";
+			data         = /incbin/("amp2.bin");
+			type         = "firmware";
+			compression  = "none";
+			arch         = "arm";	 // "arm64" or "arm"
+			cpu          = <0xf02>;  // mpidr
+			thumb        = <0>;      // 0: arm or thumb2; 1: thumb
+			hyp          = <0>;      // 0: el1/svc; 1: el2/hyp
+			load         = <0x03e00000>;
+			size         = <0x00100000>;
+			srambase     = <0xfff80000>;
+			sramsize     = <0x0000c000>;
+			udelay       = <10000>;
+			hash {
+				algo = "sha256";
+			};
+		};
+
+		mcu {
+			description  = "mcu-rpmsg-responder";
+			data         = /incbin/("mcu.bin");
+			type         = "standalone";	// must be "standalone"
+			compression  = "none";
+			arch         = "arm";		// "arm64" or "arm", the same as U-Boot state
+			load         = <0xfff84000>;
+			udelay       = <1000000>;
+			hash {
+				algo = "sha256";
+			};
+		};
+	};
+
+	configurations {
+		default = "conf";
+		conf {
+			description = "Rockchip AMP images";
+			rollback-index = <0x0>;
+			loadables = "amp2", "mcu";
+
+			signature {
+				algo = "sha256,rsa2048";
+				padding = "pss";
+				key-name-hint = "dev";
+				sign-images = "loadables";
+			};
+		};
+	};
+};

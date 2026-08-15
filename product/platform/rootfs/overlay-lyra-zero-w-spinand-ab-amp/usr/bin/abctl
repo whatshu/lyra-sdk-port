@@ -1,0 +1,414 @@
+#!/usr/bin/env python3
+"""abctl — A/B (dual-slot) boot control for the Lyra Zero W (RK3506, SPI NAND).
+
+Talks to the same on-disk slot metadata that u-boot uses (AvbABData, the
+32-byte struct at byte offset 2048 of the ``misc`` MTD partition), so every
+operation here is exactly what u-boot will see on the next boot.  The struct
+layout matches u-boot's include/android_avb/avb_ab_flow.h.
+
+The storage backend is MTD (NAND), not GPT/eMMC:
+
+  - partitions come from /proc/mtd (the mtdparts u-boot injected:
+    mtd0=uboot, mtd1=misc, mtd2=boot_a, mtd3=boot_b, mtd4=amp, mtd5=system_a,
+    mtd6=system_b, mtd7=spare);
+  - the ``misc`` partition is read/written bad-block-aware: a page read-modify-
+    write through the raw /dev/mtdN char device (MEMGETBADBLOCK + MEMERASE
+    ioctls), mirroring how u-boot's mtd_dwrite touches the same struct;
+  - the TF data card is a GPT ``userdata`` partition on /dev/mmcblk0 (the only
+    mmc device on the Zero W); it is data-only and never booted.
+
+Commands (all print JSON on stdout, logs on stderr — web-callable):
+
+  abctl status              current slot, per-slot state, active root partition
+  abctl mark-success        mark the booted slot successful (tries=0, succ=1)
+  abctl set-active <a|b>    make <slot> the active slot (pri=15/tries=7)
+  abctl set-other-active    promote the inactive slot (rollback)
+  abctl find-part <name>    resolve a partition name to a /dev node (mtd|mmc)
+  abctl ensure-userdata     format (if needed) + mount /userdata (TF card)
+
+The policy is the "successful_boot" model: a freshly activated slot boots with
+tries_remaining=7 and must be marked successful (S99abctl does this once the
+system is up) or it expires and u-boot falls back to the other slot.
+"""
+
+from __future__ import annotations
+
+import argparse
+import errno
+import fcntl
+import glob
+import json
+import os
+import re
+import struct
+import subprocess
+import sys
+import zlib
+
+AB_MAGIC = b"\x00AB0"
+AB_METADATA_OFFSET = 2048
+MAX_PRIORITY = 15
+MAX_TRIES = 7
+GPT_SIGNATURE = b"EFI PART"
+EXT4_MAGIC = b"\x53\xef"          # 0xEF53 LE, at partition offset 1080
+USERDATA_MP = "/userdata"
+
+# MTD char device ioctls (linux/mtd/mtd-abi.h); arg formats below.
+MEMGETINFO = 0x804D6D01            # _IOR(90, 1, struct mtd_info_user)
+MEMERASE = 0x40084D02              # _IOW(90, 2, struct erase_info_user)
+MEMGETBADBLOCK = 0x80084D06        # _IOR(90, 6, loff_t)
+
+
+# --------------------------------------------------------------------------
+# MTD partition access (no udev: /proc/mtd is the partition table)
+# --------------------------------------------------------------------------
+def mtd_partitions() -> dict:
+    """Parse /proc/mtd -> {name: {"dev": "/dev/mtdN", "size": bytes}}."""
+    out = {}
+    try:
+        with open("/proc/mtd") as f:
+            next(f, None)                    # header line
+            for line in f:
+                m = re.match(r"mtd(\d+):\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s*\"(.+)\"", line)
+                if m:
+                    out[m.group(4)] = {"dev": f"/dev/mtd{m.group(1)}",
+                                       "size": int(m.group(2), 16)}
+    except OSError:
+        pass
+    return out
+
+
+def mtd_partition(name: str):
+    """Return /dev/mtdN for partition ``name``, or None."""
+    return mtd_partitions().get(name, {}).get("dev")
+
+
+def _mtd_info(dev: str) -> dict:
+    with open(dev, "rb") as f:
+        buf = bytearray(40)                  # struct mtd_info_user
+        fcntl.ioctl(f.fileno(), MEMGETINFO, buf)
+    size, erasesize, writesize, oobsize = struct.unpack_from("@IIII", buf, 4)
+    return {"size": size, "erasesize": erasesize,
+            "writesize": writesize, "oobsize": oobsize}
+
+
+def _mtd_block_bad(dev: str, offset: int) -> bool:
+    with open(dev, "rb") as f:
+        try:
+            fcntl.ioctl(f.fileno(), MEMGETBADBLOCK, struct.pack("@q", offset))
+            return False
+        except OSError as e:
+            if e.errno == errno.EIO:
+                return True
+            raise
+
+
+def mtd_rmw_page(dev: str, offset: int, data: bytes) -> None:
+    """NAND-safe read-modify-write of ``data`` at ``offset``.
+
+    u-boot stores AvbABData in a single NAND page (2048 bytes) whose only real
+    content is the 32-byte struct (the rest of the page is 0xFF and the rest of
+    the erase block is erased), so the RMW is: read the page, patch the struct,
+    erase the containing block, program the page back.  This mirrors
+    u-boot's mtd_dwrite semantics for the misc partition; the block is checked
+    with MEMGETBADBLOCK first and the operation fails loudly on a bad block
+    rather than silently corrupting the metadata.
+    """
+    info = _mtd_info(dev)
+    psz, esz = info["writesize"], info["erasesize"]
+    page_start = offset & ~(psz - 1)
+    block_start = page_start & ~(esz - 1)
+    if _mtd_block_bad(dev, block_start):
+        raise RuntimeError(f"erase block at {block_start} in {dev} is bad; "
+                           f"cannot update A/B metadata safely")
+    with open(dev, "rb") as f:
+        f.seek(page_start)
+        page = bytearray(f.read(psz))
+    rel = offset - page_start
+    page[rel:rel + len(data)] = data
+    with open(dev, "r+b", buffering=0) as f:
+        fcntl.ioctl(f.fileno(), MEMERASE, struct.pack("@II", block_start, esz))
+        f.seek(page_start)
+        f.write(bytes(page))
+    os.sync()
+
+
+# --------------------------------------------------------------------------
+# GPT access for the TF data card (no udev on this rootfs)
+# --------------------------------------------------------------------------
+def _read_block(dev: str, offset: int, size: int) -> bytes:
+    with open(dev, "rb") as f:
+        f.seek(offset)
+        return f.read(size)
+
+
+def gpt_partitions(dev: str):
+    """Parse a GPT and return [(index0, name, first_lba, last_lba, part_uuid)]."""
+    try:
+        hdr = _read_block(dev, 512, 92)
+    except OSError:
+        return []
+    if hdr[:8] != GPT_SIGNATURE:
+        return []
+    parts_lba = struct.unpack_from("<Q", hdr, 0x48)[0]
+    num = struct.unpack_from("<I", hdr, 0x50)[0]
+    esz = struct.unpack_from("<I", hdr, 0x54)[0]
+    if not (1 <= num <= 128) or not (128 <= esz <= 512):
+        return []
+    arr = _read_block(dev, parts_lba * 512, num * esz)
+    out = []
+    for i in range(num):
+        e = arr[i * esz:(i + 1) * esz]
+        if len(e) < 128:
+            break
+        if e[0:16] == b"\x00" * 16:        # unused entry
+            continue
+        name = e[0x38:0x38 + 72].decode("utf-16-le", errors="replace").rstrip("\x00")
+        flba = struct.unpack_from("<Q", e, 0x20)[0]
+        llba = struct.unpack_from("<Q", e, 0x28)[0]
+        out.append((i, name, flba, llba, e[0x10:0x20]))
+    return out
+
+
+def find_userdata():
+    """Return the /dev node of GPT partition ``userdata`` on /dev/mmcblk*."""
+    for dev in sorted(glob.glob("/dev/mmcblk[0-9]*")):
+        if not re.match(r"^/dev/mmcblk(\d+)$", dev):
+            continue
+        for idx, pname, *_ in gpt_partitions(dev):
+            if pname == "userdata":
+                return f"{dev}p{idx + 1}"
+    return None
+
+
+# --------------------------------------------------------------------------
+# AvbABData (u-boot A/B metadata, 32 bytes big-endian at misc+2048)
+# --------------------------------------------------------------------------
+def build_abdata(slots, last_boot: int = 0) -> bytes:
+    (pa, ta, sa), (pb, tb, sb) = slots
+    head = struct.pack(">4sBB2s", AB_MAGIC, 1, 0, b"\x00\x00")
+    body = head + struct.pack(">4B4B", pa, ta, sa, 0, pb, tb, sb, 0)
+    body += struct.pack(">B", last_boot) + b"\x00" * 11
+    assert len(body) == 28
+    return body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+
+def read_abdata(misc_dev: str):
+    """Return (slots, last_boot, valid).  slots = ((p,t,s),(p,t,s))."""
+    with open(misc_dev, "rb") as f:
+        f.seek(AB_METADATA_OFFSET)
+        data = f.read(32)
+    if len(data) < 32 or data[:4] != AB_MAGIC:
+        return ((0, 0, 0), (0, 0, 0)), 0, False
+    (_magic, _maj, _min, _r1,
+     pa, ta, sa, _ra, pb, tb, sb, _rb, last_boot, _r2, crc) = \
+        struct.unpack(">4sBB2s4B4BB11sI", data)
+    valid = crc == (zlib.crc32(data[:28]) & 0xFFFFFFFF)
+    return ((pa, ta, sa), (pb, tb, sb)), last_boot, valid
+
+
+def write_abdata(misc_dev: str, slots, last_boot: int = 0) -> None:
+    blob = build_abdata(slots, last_boot)
+    mtd_rmw_page(misc_dev, AB_METADATA_OFFSET, blob)
+
+
+def slot_is_bootable(slot) -> bool:
+    p, t, succ = slot
+    return bool(p > 0 and (succ != 0 or t > 0))
+
+
+# --------------------------------------------------------------------------
+# Status
+# --------------------------------------------------------------------------
+def current_slot():
+    """Read the booted slot from /proc/cmdline (androidboot.slot_suffix)."""
+    try:
+        cmd = open("/proc/cmdline").read()
+    except OSError:
+        return None
+    m = re.search(r"androidboot\.slot_suffix=_(a|b)", cmd)
+    return m.group(1) if m else None
+
+
+def load_status() -> dict:
+    """Assemble the status JSON (also used by ota-update and the web layer)."""
+    misc = mtd_partition("misc")
+    if misc:
+        slots, last_boot, valid = read_abdata(misc)
+    else:
+        slots, last_boot, valid = ((0, 0, 0), (0, 0, 0)), 0, False
+    cur = current_slot()
+
+    sys_a, sys_b = mtd_partition("system_a"), mtd_partition("system_b")
+    parts = {"a": sys_a, "b": sys_b}
+
+    # Active root from /proc/cmdline (u-boot injects ubi.mtd= for the slot)
+    root = None
+    try:
+        m = re.search(r"ubi\.mtd=(\d+)", open("/proc/cmdline").read())
+        if m:
+            root = f"ubi.mtd={m.group(1)}"
+    except OSError:
+        pass
+
+    return {
+        "current_slot": cur,
+        "metadata_valid": valid,
+        "misc_device": misc,
+        "last_boot": last_boot,
+        "slots": {
+            "a": {
+                "priority": slots[0][0], "tries_remaining": slots[0][1],
+                "successful_boot": slots[0][2], "bootable": slot_is_bootable(slots[0]),
+                "device": parts["a"], "partuuid": None,
+            },
+            "b": {
+                "priority": slots[1][0], "tries_remaining": slots[1][1],
+                "successful_boot": slots[1][2], "bootable": slot_is_bootable(slots[1]),
+                "device": parts["b"], "partuuid": None,
+            },
+        },
+        "root": root,
+    }
+
+
+def _out(d: dict) -> None:
+    print(json.dumps(d, indent=2))
+
+
+# --------------------------------------------------------------------------
+# Commands
+# --------------------------------------------------------------------------
+def cmd_status(_args) -> int:
+    _out(load_status())
+    return 0
+
+
+def cmd_mark_success(_args) -> int:
+    st = load_status()
+    if not st["metadata_valid"]:
+        print(json.dumps({"ok": False, "error": "misc metadata invalid/uninitialized"}))
+        return 1
+    cur = st["current_slot"]
+    if cur not in ("a", "b"):
+        print(json.dumps({"ok": False, "error": "current slot unknown (no androidboot.slot_suffix in cmdline)"}))
+        return 1
+    slots = (st["slots"]["a"], st["slots"]["b"])
+    slot = slots[0] if cur == "a" else slots[1]
+    if not slot["bootable"]:
+        print(json.dumps({"ok": False, "error": f"slot {cur} is not bootable, refusing to mark success"}))
+        return 1
+    if slot["successful_boot"]:
+        print(json.dumps({"ok": True, "slot": cur, "already": True}))   # idempotent
+        return 0
+    # Mirror u-boot's avb_ab_mark_slot_successful: tries_remaining=0, successful=1
+    new = [(slots[0]["priority"], slots[0]["tries_remaining"], slots[0]["successful_boot"]),
+           (slots[1]["priority"], slots[1]["tries_remaining"], slots[1]["successful_boot"])]
+    new[0 if cur == "a" else 1] = (slot["priority"], 0, 1)
+    write_abdata(st["misc_device"], (tuple(new[0]), tuple(new[1])), st["last_boot"])
+    print(json.dumps({"ok": True, "slot": cur, "tries_remaining": 0, "successful_boot": 1}))
+    return 0
+
+
+def _activate(misc_dev, last_boot, target: str) -> None:
+    """Promote ``target`` to active (pri=15/tries=7/succ=0), other to pri=14."""
+    slots = [(MAX_PRIORITY, MAX_TRIES, 0), (MAX_PRIORITY - 1, MAX_TRIES, 0)]
+    if target == "b":
+        slots.reverse()
+    write_abdata(misc_dev, tuple(slots), last_boot)
+
+
+def cmd_set_active(args) -> int:
+    st = load_status()
+    if not st["metadata_valid"]:
+        print(json.dumps({"ok": False, "error": "misc metadata invalid/uninitialized"}))
+        return 1
+    _activate(st["misc_device"], st["last_boot"], args.slot)
+    print(json.dumps({"ok": True, "active": args.slot, "note": "reboot to apply"}))
+    return 0
+
+
+def cmd_set_other_active(_args) -> int:
+    st = load_status()
+    cur = st["current_slot"]
+    if cur not in ("a", "b"):
+        print(json.dumps({"ok": False, "error": "current slot unknown"}))
+        return 1
+    if not st["metadata_valid"]:
+        print(json.dumps({"ok": False, "error": "misc metadata invalid/uninitialized"}))
+        return 1
+    target = "b" if cur == "a" else "a"
+    _activate(st["misc_device"], st["last_boot"], target)
+    print(json.dumps({"ok": True, "active": target, "note": "reboot to apply"}))
+    return 0
+
+
+def cmd_find_part(args) -> int:
+    dev = mtd_partition(args.name) or find_userdata()
+    print(json.dumps({"name": args.name, "device": dev}))
+    return 0 if dev else 1
+
+
+def cmd_ensure_userdata(_args) -> int:
+    dev = find_userdata()
+    if not dev:
+        print(json.dumps({"ok": False, "error": "userdata partition not found "
+                                                 "(no TF card, or no userdata GPT entry on it)"}))
+        return 1
+    # already mounted?
+    try:
+        mounts = open("/proc/mounts").read()
+        if re.search(rf"^{dev}\s+{re.escape(USERDATA_MP)}", mounts, re.M):
+            print(json.dumps({"ok": True, "device": dev, "mounted": USERDATA_MP}))
+            return 0
+    except OSError:
+        pass
+    # has a filesystem yet?  ext4 superblock magic at absolute offset 1080.
+    try:
+        with open(dev, "rb") as f:
+            f.seek(1080)
+            magic = f.read(2)
+    except OSError as e:
+        print(json.dumps({"ok": False, "error": f"cannot read {dev}: {e}"}))
+        return 1
+    if magic != EXT4_MAGIC:
+        print(f">>> formatting {dev} (ext4)", file=sys.stderr)
+        r = subprocess.run(["mkfs.ext4", "-F", "-L", "userdata", dev])
+        if r.returncode != 0:
+            print(json.dumps({"ok": False, "error": "mkfs.ext4 failed"}))
+            return 1
+    os.makedirs(USERDATA_MP, exist_ok=True)
+    r = subprocess.run(["mount", "-t", "ext4", dev, USERDATA_MP])
+    if r.returncode != 0:
+        print(json.dumps({"ok": False, "error": f"mount {dev} failed"}))
+        return 1
+    print(json.dumps({"ok": True, "device": dev, "mounted": USERDATA_MP}))
+    return 0
+
+
+def main(argv) -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("status", help="show slot state (JSON)")
+    sub.add_parser("mark-success", help="mark the booted slot successful")
+    sp = sub.add_parser("set-active", help="make a slot active (reboot applies)")
+    sp.add_argument("slot", choices=("a", "b"))
+    sub.add_parser("set-other-active", help="promote the inactive slot (rollback)")
+    sp = sub.add_parser("find-part", help="resolve a partition name (mtd|mmc)")
+    sp.add_argument("name")
+    sub.add_parser("ensure-userdata", help="format (if needed) + mount /userdata")
+
+    args = ap.parse_args(argv)
+    return {"status": cmd_status,
+            "mark-success": cmd_mark_success,
+            "set-active": cmd_set_active,
+            "set-other-active": cmd_set_other_active,
+            "find-part": cmd_find_part,
+            "ensure-userdata": cmd_ensure_userdata,
+            }[args.cmd](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
