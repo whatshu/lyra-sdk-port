@@ -61,14 +61,20 @@ def make_release_dir(ctx, artifacts: list[Path]) -> Path:
         shutil.copy2(a, dst)
         copied.append(dst)
 
-    # xz-compress every image so releases are cheap to transfer/archive
+    # xz-compress every image so releases are cheap to transfer/archive.
+    # Files already compressed by an earlier stage (update.img.xz from the
+    # firmware stage) are kept as-is rather than double-compressed.
     notice("compressing release images with xz ...")
+    n_compressed = 0
     for p in list(copied):
+        if p.suffix == ".xz":
+            continue
         xz = fw_dir / f"{p.name}.xz"
         subprocess.run(["xz", "-T0", "-6", "-k", str(p), "-c"],
                        stdout=open(xz, "wb"), check=True)
         copied.append(xz)
-    info(f"compressed {len(copied) - len(artifacts)} images to .xz")
+        n_compressed += 1
+    info(f"compressed {n_compressed} images to .xz")
 
     # sha256 sums (includes the .xz copies)
     sums = "\n".join(f"{file_sha256(p)}  {p.name}"
