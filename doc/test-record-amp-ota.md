@@ -1,71 +1,67 @@
-# Test Record — AMP (Linux↔M0 rpmsg) + OTA A/B on the eMMC verification bed
+# 测试记录 — eMMC 验证台上的 AMP (Linux↔M0 rpmsg) + OTA A/B
 
-Date: 2026-08-15 (power-cycle sessions 11:50, 12:xx)
+日期: 2026-08-15(断电重启测试时段 11:50、12:xx)
 
-Bed: **physical Lyra Ultra W** — board `lyra-ultra-w-emmc-ab-amp`
-(RK3506B, eMMC, A/B boot + AMP).  NAND variant `lyra-zero-w-spinand-ab-amp`
-shares the SoC/AMP path; its storage path is build-only (no Zero W hardware
-yet).
+测试台:**实体 Lyra Ultra W** — 板型 `lyra-ultra-w-emmc-ab-amp`
+(RK3506B、eMMC、A/B 启动 + AMP)。NAND 变体 `lyra-zero-w-spinand-ab-amp`
+共享 SoC/AMP 路径;其存储路径仅做构建(尚无 Zero W 硬件)。
 
-Firmware under test (one coherent unit, built `make build
-BOARD=lyra-ultra-w-emmc-ab-amp` at 03:28 + the M0 fix rebuilt at 11:45):
+被测固件(一个整体单元,于 03:28 使用 `make build
+BOARD=lyra-ultra-w-emmc-ab-amp` 构建,随后 M0 修复在 11:45 重新构建):
 
-| image | md5 | note |
+| 镜像 | md5 | 说明 |
 |---|---|---|
-| `update.img` | `5f7b3898…` | the coherent 03:28 unit (u-boot + kernel + rootfs + amp) |
-| `boot_a.img` / `boot_b.img` | `3046d6e7…` | identical, written to both slots |
-| `system_a.img` / `system_b.img` | `198227ec…` | identical, written to both slots |
-| `amp.img` **pre-fix** | `04335873…` | mcu.bin `57b60f84…` (marker responder, no INTEN enable) |
-| `amp.img` **post-fix** (flashed) | `aa37f4fc…` | mcu.bin `273c87f5…` (`mbox_enable_rx` fix), amp2/RT-Thread `ffd76152…` unchanged |
+| `update.img` | `5f7b3898…` | 03:28 的整体单元(u-boot + kernel + rootfs + amp) |
+| `boot_a.img` / `boot_b.img` | `3046d6e7…` | 相同,已写入两个槽位 |
+| `system_a.img` / `system_b.img` | `198227ec…` | 相同,已写入两个槽位 |
+| `amp.img` **修复前** | `04335873…` | mcu.bin `57b60f84…`(标记响应器,未使能 INTEN) |
+| `amp.img` **修复后**(已烧写) | `aa37f4fc…` | mcu.bin `273c87f5…`(`mbox_enable_rx` 修复),amp2/RT-Thread `ffd76152…` 未变 |
 
-Environment: SSH `root@192.168.123.100` (USB gadget ethernet, `luckfox`),
-register/buffer reads via `devmem`.
+环境:SSH `root@192.168.123.100`(USB gadget 以太网,`luckfox`),
+通过 `devmem` 读取寄存器/缓冲区。
 
 ---
 
-## 1. Result summary
+## 1. 结果汇总
 
-| # | test | result |
+| # | 测试 | 结果 |
 |---|---|---|
-| A1 | M0 boots after a real mains power-cycle (POR) | ✅ all boot markers + heartbeat |
-| A2 | AP→M0 (A2B) kick reaches the M0 **after the fix, zero manual intervention** | ✅ `A2B_INTEN=0x101` self-enabled |
-| A3 | M0 announces endpoint → `/dev/ttyRPMSG0` | ✅ channel created at 4.0 s |
-| A4 | `m0ping` ping→pong round-trip | ✅ **5/5, 0 lost, RTT avg 253 µs** (226–295) |
-| B1 | `ota-update apply` writes inactive slot + promotes | ✅ slot B written, pri 15 |
-| B2 | reboot lands on the promoted slot | ✅ `current_slot=b`, `root=PARTUUID d7891b4a…` |
-| B3 | `S99abctl` marks the booted slot successful | ✅ `tries 0, successful_boot 1` |
-| C1 | M0 is POR-only (does not re-run on any software reset) | ✅ confirmed (4 mechanisms, see §5) |
+| A1 | M0 在一次真实的市电断电重启(POR)后启动 | ✅ 所有启动标记 + heartbeat |
+| A2 | AP→M0 (A2B) kick **在修复后零手动干预**即可到达 M0 | ✅ `A2B_INTEN=0x101` 自使能 |
+| A3 | M0 通告端点 → `/dev/ttyRPMSG0` | ✅ 通道在 4.0 s 时创建 |
+| A4 | `m0ping` ping→pong 往返 | ✅ **5/5,0 丢失,RTT 平均 253 µs**(226–295) |
+| B1 | `ota-update apply` 写入非活动槽位并提升 | ✅ 槽位 B 已写入,pri 15 |
+| B2 | 重启后落在被提升的槽位 | ✅ `current_slot=b`,`root=PARTUUID d7891b4a…` |
+| B3 | `S99abctl` 将已启动槽位标记为成功 | ✅ `tries 0, successful_boot 1` |
+| C1 | M0 仅 POR 触发(任何软件复位都不会重新运行) | ✅ 已确认(4 种机制,见 §5) |
 
 ---
 
-## 2. Root cause found: missing A2B_INTEN enable bit
+## 2. 已找到根因:缺少 A2B_INTEN 使能位
 
-The announce path was dead (`/dev/ttyRPMSG0` never appeared) even though the
-M0 ran and the kernel posted its rx buffers.  The M0's poll was **not** the
-problem — the official HAL does exactly what the responder does (`HAL_MBOX_*
-` checks `A2B_STATUS & 1` for a B2A-mode remote).  The defect is upstream in
-the **AP→M0 direction enable**:
+通告路径已失效(`/dev/ttyRPMSG0` 从未出现),尽管 M0 在运行且内核已投递其
+rx 缓冲区。M0 的轮询**并不是**问题所在 — 官方 HAL 的做法与响应器完全一致
+(`HAL_MBOX_*` 检查 `A2B_STATUS & 1` 以判断 B2A 模式远端)。缺陷出在上游的
+**AP→M0 方向使能**上:
 
-- The AP's `rockchip_mbox_v2_startup()` writes `A2B_INTEN = 0x01000100`.
-  Bit 24 is the write-enable key and is *consumed by the hardware*; only the
-  bit-8 trigger-method field lands.  Live read: `A2B_INTEN = 0x00000100`.
-- **Without `INTEN_TX_DONE` (bit 0) the hardware never latches
-  `A2B_STATUS`**, so the AP's kick sits in `A2B_CMD/DAT` (`cmd=2`,
-  `data=0x524D5347`) with status stuck at 0 — the M0 can never observe it.
-- The kernel **expects the remote to enable its own receive side**
-  (`HAL_MBOX_ChanEnable` writes `A2B_INTEN = 1<<16 | 1`), but the rk3506-mcu
-  HAL project contains no mailbox code, so nobody ever set bit 0.
-- Contrast: `B2A_INTEN = 0x101` (bit 0 + bit 8) — so M0→AP (liveness poke,
-  reply kicks) worked all along.
+- AP 的 `rockchip_mbox_v2_startup()` 写入 `A2B_INTEN = 0x01000100`。
+  位 24 是写使能密钥,并被硬件*消耗*;只有位 8 的触发方式字段生效。实际读取:
+  `A2B_INTEN = 0x00000100`。
+- **没有 `INTEN_TX_DONE`(位 0),硬件永远不会锁存 `A2B_STATUS`**,因此 AP 的
+  kick 停留在 `A2B_CMD/DAT`(`cmd=2`、`data=0x524D5347`)中,状态一直为 0 —
+  M0 永远无法观察到它。
+- 内核**期望远端自行使能其接收侧**(`HAL_MBOX_ChanEnable` 写入
+  `A2B_INTEN = 1<<16 | 1`),但 rk3506-mcu HAL 工程中不包含任何 mailbox
+  代码,因此从未有人设置位 0。
+- 对比:`B2A_INTEN = 0x101`(位 0 + 位 8)— 因此 M0→AP(存活探测、应答
+  kick)一直正常工作。
 
-**Reusable register insight** (RK3506 V2 mailbox): INTEN/STATUS use
-write-enable keys — `1<<16` keys bits 0–15, `1<<24` keys the bit-8 trigger
-field.  The key is consumed on the write and never stored; writing *both* keys
-in one write is rejected (bit 0 did not land from `0x01000101`), while a
-single-key write leaves the other field untouched (`0x00010001` → `0x101`
-when bit 8 is already set).
+**可复用的寄存器经验**(RK3506 V2 mailbox):INTEN/STATUS 使用写使能密钥 —
+`1<<16` 作用于位 0–15,`1<<24` 作用于位 8 触发字段。密钥在写入时被消耗,从不
+保存;一次写入中*同时*写入两个密钥会被拒绝(位 0 未从 `0x01000101` 落地),而
+单密钥写入则保持另一字段不变(当位 8 已置位时,`0x00010001` → `0x101`)。
 
-**Fix** (`firmware/mcu/src/rpmsg_responder.c`, `mbox_enable_rx()`):
+**修复**(`firmware/mcu/src/rpmsg_responder.c`、`mbox_enable_rx()`):
 
 ```c
 #define MBOX_A2B_INTEN_EN  0x00010001UL   /* write-enable key | bit 0 */
@@ -77,19 +73,18 @@ static void mbox_enable_rx(void)
 }
 ```
 
-Called at responder init **and every heartbeat (256 iterations)** — it must be
-periodic, because the AP re-runs `v2_startup()` on every Linux boot and its
-write clears bit 0 again (chicken-and-egg: the handshake kick cannot be seen
-until bit 0 is enabled, so the M0 cannot wait for a kick to self-enable).
+在响应器初始化时调用,**并在每次 heartbeat(256 次迭代)时调用** — 它必须是周期
+性的,因为 AP 在每次 Linux 启动时都会重新运行 `v2_startup()`,其写入会再次清除
+位 0(鸡生蛋问题:在使能位 0 之前无法看到握手 kick,因此 M0 不能等待 kick 来自
+行使能)。
 
 ---
 
-## 3. Test A — M0 announce + m0ping
+## 3. 测试 A — M0 通告 + m0ping
 
-### A0. Live diagnosis (pre-fix, manual)
+### A0. 在线诊断(修复前,手动)
 
-Before the fix the following was observed with the M0 running the marker
-responder (mcu.bin `57b60f84…`):
+修复前,在 M0 运行标记响应器(mcu.bin `57b60f84…`)的情况下观察到以下内容:
 
 ```
 A2B_INTEN @ff292000 = 0x00000100     # trigger only, no enable
@@ -98,7 +93,7 @@ A2B_CMD/DAT @ff292008/0c = 0x2 / 0x524D5347   # kick sits, undelivered
 B2A_INTEN @ff292010   = 0x00000101   # M0→AP works
 ```
 
-Manual enable + re-kick (proves the mechanism):
+手动使能 + 重新 kick(证明该机制):
 
 ```
 devmem 0xff292000 32 0x00010001      # set bit 0 (key 1<<16), bit 8 preserved
@@ -106,14 +101,14 @@ devmem 0xff292008 32 0x2             # cmd
 devmem 0xff29200c 32 0x524d5347      # dat -> A2B_STATUS latches, M0 consumes
 ```
 
-Result: `rvq used idx 0→1` (NS announce posted), `/dev/ttyRPMSG0` appears,
-kernel logs `creating channel rpmsg-tty addr 0x1f`.  `m0ping` first run:
-**5/5 ok, RTT µs {min 231.9, avg 287.6, max 417.4, p50 270.1}**.
+结果:`rvq used idx 0→1`(NS 通告已发布),`/dev/ttyRPMSG0` 出现,
+内核记录 `creating channel rpmsg-tty addr 0x1f`。`m0ping` 首次运行:
+**5/5 ok,RTT µs {min 231.9, avg 287.6, max 417.4, p50 270.1}**。
 
-### A1–A4. Post-fix, real power-cycle, zero manual intervention
+### A1–A4. 修复后,真实断电重启,零手动干预
 
-New amp.img (mcu.bin `273c87f5…`) flashed to `/dev/mmcblk0p6`, then a mains
-power-cycle.  Battery run automatically after the board returned (~16 s):
+新的 amp.img(mcu.bin `273c87f5…`)已烧写到 `/dev/mmcblk0p6`,随后进行一次市电
+断电重启。板卡回来后自动运行测试套件(约 16 s):
 
 ```
 A2B_INTEN @ff292000 = 0x00000101     # self-enabled by the new firmware  ✅
@@ -126,14 +121,14 @@ m0ping: {"rounds":5,"ok":5,"lost":0,
 post-ping rvq used = 6, svq used = 5   # NS + 5 pongs / 5 pings          ✅
 ```
 
-The firmware fix is confirmed end-to-end: after a clean POR the whole
-Linux↔M0 rpmsg link (announce → `/dev/ttyRPMSG0` → ping-pong) arms itself.
+固件修复已端到端确认:在干净的 POR 之后,整个
+Linux↔M0 rpmsg 链路(通告 → `/dev/ttyRPMSG0` → ping-pong)会自行动作。
 
 ---
 
-## 4. Test B — OTA A/B regression
+## 4. 测试 B — OTA A/B 回归
 
-`ota-update` (same machinery as the `lyra-ultra-w-emmc-ab` board, doc/ab-boot.md):
+`ota-update`(与 `lyra-ultra-w-emmc-ab` 板型相同的机制,doc/ab-boot.md):
 
 ```
 ota-update apply --rootfs /system_a.img --boot /boot_a.img
@@ -142,8 +137,8 @@ ota-update apply --rootfs /system_a.img --boot /boot_a.img
 {"ok": true, "slot": "b", "dry_run": false}
 ```
 
-Post-apply metadata: **B pri 15 / tries 7, A demoted to pri 14**.  Warm reboot
-(PSCI) → landed on slot B:
+apply 后的元数据:**B pri 15 / tries 7,A 降级为 pri 14**。热重启
+(PSCI)→ 落在槽位 B:
 
 ```
 current_slot: b        root: PARTUUID d7891b4a-7115-4ca8-bd65-19d775fed905
@@ -152,46 +147,44 @@ slots.b: priority 15, tries 0, successful_boot 1   # S99abctl mark-success ran
 slots.a: priority 14, tries 7, successful_boot 0   # fallback
 ```
 
-Slot B rootfs = `/dev/mmcblk0p8`; tools (`abctl`/`m0ping`/`ota-update`) present;
-AMP kernel boots from B (`rockchip-rpmsg … rpmsg host is online`).  Rollback
-(`abctl set-other-active`) was verified on the `lyra-ultra-w-emmc-ab` bed on
-the same A/B machinery and is not re-run here.
+槽位 B 的 rootfs = `/dev/mmcblk0p8`;工具(`abctl`/`m0ping`/`ota-update`)存在;
+AMP 内核从 B 启动(`rockchip-rpmsg … rpmsg host is online`)。回滚
+(`abctl set-other-active`)已在 `lyra-ultra-w-emmc-ab` 测试台上通过相同的
+A/B 机制验证,此处不再重复运行。
 
 ---
 
-## 5. Known behaviour / limitations
+## 5. 已知行为 / 限制
 
-- **M0 is POR-only.**  It executes only after a real mains power-cycle.  All
-  software reset paths fail to re-run it (exhaustively tested 2026-08-15):
-  (1) CRU `SRST_HRESETN_M0_AC` (SOFTRST_CON00 bit 10 — write doesn't even
-  stick), (2) CRU `SRST_H_M0` (SOFTRST_CON05 bit 10 — no effect), (3) PSCI
-  warm `reboot`, (4) CRU `GLB_SRST_FST` global reset.  Root model: u-boot/TEE
-  (`sip_smc_mcu_config`) only stage the code; the M0 core release + bootrom
-  vector setup happens only in the POR path.  So after any warm reboot
-  `/dev/ttyRPMSG0` is absent until the next power-cycle (DDR heartbeat word
-  stays frozen at its pre-reboot value).
-- **Firmware must self-heal the A2B enable** across Linux reboots (periodic
-  `mbox_enable_rx()`), because the AP's `v2_startup` clears bit 0 each boot.
-- `amp2` (RT-Thread on cpu@f02) is present in the FIT and released by u-boot,
-  but its console heartbeat was not observed this session (not part of the
-  ping-pong; see doc/amp.md).
-- Deferred cleanup: staged OTA images `/boot_a.img` + `/system_a.img`
-  (~267 MB) sit in slot A's rootfs; remove by mounting `/dev/mmcblk0p7`.
-  The temporary boot-progress markers (`bootmark.h`, `fault_diag.c`) remain
-  in the M0 build and can be removed once the link is considered stable.
+- **M0 仅 POR 触发。** 它只在真实的市电断电重启后才会执行。所有软件复位路径
+  都无法使其重新运行(已于 2026-08-15 详尽测试):
+  (1) CRU `SRST_HRESETN_M0_AC`(SOFTRST_CON00 位 10 — 写入甚至不会生效),
+  (2) CRU `SRST_H_M0`(SOFTRST_CON05 位 10 — 无效果),(3) PSCI 热 `reboot`,
+  (4) CRU `GLB_SRST_FST` 全局复位。根因模型:u-boot/TEE
+  (`sip_smc_mcu_config`)只是暂存代码;M0 内核释放 + bootrom 向量设置只发生在
+  POR 路径中。因此任何热重启后 `/dev/ttyRPMSG0` 都会缺失,直到下一次断电重启
+  (DDR heartbeat 字冻结在重启前的值)。
+- **固件必须跨 Linux 重启自愈 A2B 使能**(周期性的 `mbox_enable_rx()`),
+  因为 AP 的 `v2_startup` 每次启动都会清除位 0。
+- `amp2`(cpu@f02 上的 RT-Thread)存在于 FIT 中并由 u-boot 释放,但本次会话
+  未观察到其控制台 heartbeat(不属于 ping-pong 的一部分;见 doc/amp.md)。
+- 延后清理:暂存的 OTA 镜像 `/boot_a.img` + `/system_a.img`
+  (约 267 MB)位于槽位 A 的 rootfs 中;通过挂载 `/dev/mmcblk0p7` 移除。
+  临时启动进度标记(`bootmark.h`、`fault_diag.c`)仍保留在 M0 构建中,一旦
+  该链路被认为是稳定的即可移除。
 
-## 6. Reproducing
+## 6. 复现
 
-Host-side scripts used (live on the build host at test time):
+测试时在构建主机上使用的宿主机侧脚本(实时):
 
-- `/tmp/watch-powercycle2.sh` — wait for board DOWN→UP, then run the battery.
-- `/tmp/verify-amp-postfix.sh` — post-POR battery: A2B_INTEN self-enable
-  check → boot markers → heartbeat → `/dev/ttyRPMSG0` → `m0ping` → `abctl`.
-- `/tmp/mbox-enable-test.sh`, `/tmp/mbox-enable2.sh` — live register enable +
-  re-kick diagnosis.
-- Board-side: `/tmp/m0diag.sh`, `/tmp/ampmarker.sh` (flash/read marker build).
+- `/tmp/watch-powercycle2.sh` — 等待板卡 DOWN→UP,然后运行测试套件。
+- `/tmp/verify-amp-postfix.sh` — POR 后测试套件:A2B_INTEN 自使能
+  检查 → 启动标记 → heartbeat → `/dev/ttyRPMSG0` → `m0ping` → `abctl`。
+- `/tmp/mbox-enable-test.sh`、`/tmp/mbox-enable2.sh` — 在线寄存器使能 +
+  重新 kick 诊断。
+- 板卡侧:`/tmp/m0diag.sh`、`/tmp/ampmarker.sh`(烧写/读取标记构建)。
 
-Key manual checks:
+关键的手动检查:
 
 ```sh
 devmem 0xff292000               # A2B_INTEN — want 0x101

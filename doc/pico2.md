@@ -1,65 +1,51 @@
-# Debugging & controlling a Raspberry Pi Pico 2 (RP2350) from the Luckfox Lyra
+# 在 Luckfox Lyra 上调试与控制 Raspberry Pi Pico 2 (RP2350)
 
-The Luckfox Lyra Ultra W can act as a **debugger** (bit-banged SWD over its RMIO
-header, driven by OpenOCD) **and** a **communication host** (SPI master) for an
-external Raspberry Pi Pico 2 (RP2350, Cortex-M33).
+Luckfox Lyra Ultra W 既可以作为**调试器**(通过其 RMIO 排针、由 OpenOCD 驱动的 bit-banged SWD),也可以作为外部 Raspberry Pi Pico 2(RP2350,Cortex-M33)的**通信主机**(SPI master)。
 
-This firmware is a **separate board variant** — `lyra-ultra-w-emmc-pico2`, a fork
-of the default `lyra-ultra-w-emmc` board config.  The default eMMC board does
-**not** include any of the pico2 bits (no spidev node, no openocd, no helpers).
+该固件是一个**独立的板级变体** — `lyra-ultra-w-emmc-pico2`,它是默认 `lyra-ultra-w-emmc` 板配置的一个分支。默认的 eMMC 板**不**包含任何 pico2 相关组件(没有 spidev 节点,没有 openocd,没有辅助脚本)。
 
-## Building the pico2 firmware
+## 构建 pico2 固件
 
 ```sh
 make build   BOARD=lyra-ultra-w-emmc-pico2     # full build -> out/firmware/
 make release BOARD=lyra-ultra-w-emmc-pico2     # full build + immutable RELEASE/ snapshot
 ```
 
-The board config `config/boards/lyra-ultra-w-emmc-pico2.mk` is byte-for-byte the
-default emmc config except it selects the pico2 device tree and the pico2
-buildroot defconfig, and the board-scoped rootfs overlay is merged in at build
-time (see below).
+板配置 `config/boards/lyra-ultra-w-emmc-pico2.mk` 与默认的 emmc 配置逐字节相同,只是它选择了 pico2 设备树和 pico2 的 buildroot defconfig,并且在构建时将板级 rootfs overlay 合并进来(见下文)。
 
-## Wiring — Luckfox Lyra Ultra W ↔ Pico 2
+## 接线 — Luckfox Lyra Ultra W ↔ Pico 2
 
-Both sides are **3.3 V** logic — no level shifting.  Power the Pico 2 from its
-own 5 V/USB supply (do **not** back-feed it from the Lyra header).  Keep the
-wires short (< 10–20 cm) and share a common GND.
+两侧都是 **3.3 V** 逻辑电平 — 无需电平转换。Pico 2 使用其自带的 5 V/USB 电源供电(**不要**从 Lyra 排针反向馈电)。保持导线尽量短(< 10–20 cm),并共用同一个 GND。
 
-| function | Luckfox RMIO pin | Luckfox GPIO | sysfs# | Pico 2 pin |
+| 功能 | Luckfox RMIO 引脚 | Luckfox GPIO | sysfs# | Pico 2 引脚 |
 |---|---|---|---|---|
-| SPI1 CLK | RMIO8 | GPIO0_PB0 | (muxed to SPI) | SPI SCK |
-| SPI1 MOSI | RMIO9 | GPIO0_PB1 | (muxed to SPI) | SPI TX / MOSI |
-| SPI1 MISO | RMIO10 | GPIO0_PB2 | (muxed to SPI) | SPI RX / MISO |
-| SPI1 CS0 | RMIO14 | GPIO0_PB6 | (muxed to SPI) | SPI CS |
-| SWD SWCLK | RMIO24 | GPIO1_PB1 | 41 | Pico 2 debug pad **SWCLK** |
-| SWD SWDIO | RMIO25 | GPIO1_PB2 | 42 | Pico 2 debug pad **SWDIO** |
-| SWD (spare) | RMIO26 | GPIO1_PB3 | 43 | *(free; RP2350 has no SRST)* |
-| GND | GND | — | — | Pico 2 GND (debug pad **GND** / pin 28) |
+| SPI1 CLK | RMIO8 | GPIO0_PB0 | (复用为 SPI) | SPI SCK |
+| SPI1 MOSI | RMIO9 | GPIO0_PB1 | (复用为 SPI) | SPI TX / MOSI |
+| SPI1 MISO | RMIO10 | GPIO0_PB2 | (复用为 SPI) | SPI RX / MISO |
+| SPI1 CS0 | RMIO14 | GPIO0_PB6 | (复用为 SPI) | SPI CS |
+| SWD SWCLK | RMIO24 | GPIO1_PB1 | 41 | Pico 2 调试焊盘 **SWCLK** |
+| SWD SWDIO | RMIO25 | GPIO1_PB2 | 42 | Pico 2 调试焊盘 **SWDIO** |
+| SWD (spare) | RMIO26 | GPIO1_PB3 | 43 | *(空闲;RP2350 无 SRST)* |
+| GND | GND | — | — | Pico 2 GND(调试焊盘 **GND** / 引脚 28) |
 
-> The Pico 2's 3-pin debug connector order is **SWCLK – GND – SWDIO** (same as
-> Pico 1).  On the RP2350 the SWD pins are dedicated package pins, so they are
-> independent of the 40-pin header's GPIO2/GPIO3 (unlike RP2040).
+> Pico 2 的 3 引脚调试连接器顺序为 **SWCLK – GND – SWDIO**(与 Pico 1 相同)。
+> 在 RP2350 上,SWD 引脚是专用的封装引脚,因此它们与 40 引脚排针上的
+> GPIO2/GPIO3 相互独立(与 RP2040 不同)。
 
-Physical positions: the RMIO labels are printed on the Lyra header silkscreen —
-verify against the [Luckfox Lyra Pinout](https://wiki.luckfox.com/Luckfox-Lyra/Pinout/)
-(Ultra/Ultra W tab) once the board is in hand.
+物理位置:RMIO 标注印在 Lyra 排针的丝印上 — 拿到板子后请对照 [Luckfox Lyra Pinout](https://wiki.luckfox.com/Luckfox-Lyra/Pinout/)
+(Ultra/Ultra W 标签页)进行核实。
 
-## What the build provides
+## 构建提供的内容
 
-- `/dev/spidev1.0` — SPI1 master on RMIO8/9/10/14 (1 MHz default), enabled in
-  the pico2 board device tree (`product/platform/dts/rk3506b-luckfox-lyra-ultra-w-pico2.dts`).
-- `openocd` — OpenOCD built with `--enable-sysfsgpio` and RP2350 target support
-  (pinned snapshot `88b9bd396`, v0.12.0-1240).
-- `/etc/openocd/pico2.cfg` — SWD bit-bang on sysfs GPIO 41/42.
-- `/usr/bin/pico2` — helper: `flash`, `halt`, `run`, `reset`, `info`.
-- `/usr/bin/pico2-spi-demo.py` — python-spidev loopback check.
+- `/dev/spidev1.0` — RMIO8/9/10/14 上的 SPI1 master(默认 1 MHz),已在 pico2 板级设备树中启用(`product/platform/dts/rk3506b-luckfox-lyra-ultra-w-pico2.dts`)。
+- `openocd` — 以 `--enable-sysfsgpio` 和 RP2350 目标支持构建的 OpenOCD(锁定快照 `88b9bd396`,v0.12.0-1240)。
+- `/etc/openocd/pico2.cfg` — 在 sysfs GPIO 41/42 上进行 SWD bit-bang。
+- `/usr/bin/pico2` — 辅助脚本:`flash`、`halt`、`run`、`reset`、`info`。
+- `/usr/bin/pico2-spi-demo.py` — python-spidev 回环自检脚本。
 
-## Using the debugger (run on the Lyra, over the USB network)
+## 使用调试器(在 Lyra 上通过 USB 网络运行)
 
-Plug the USB-C into a Linux host — the gadget exposes a CDC-ECM link and a
-DHCP server, so the host auto-configures (e.g. 192.168.123.x).  SSH straight
-to the device:
+将 USB-C 插入 Linux 主机 — gadget 会暴露一个 CDC-ECM 链路和一个 DHCP 服务器,因此主机会自动配置(例如 192.168.123.x)。直接 SSH 到设备:
 
 ```sh
 ssh root@192.168.123.100             # password: luckfox
@@ -80,23 +66,16 @@ pico2 flash /path/to/hello.elf
 #   (gdb) target remote <lyra-ip>:3333
 ```
 
-Notes:
+注意事项:
 
-- OpenOCD bit-bangs via `/sys/class/gpio`, so it must run as root (the `pico2`
-  helper is invoked by root on the Lyra).
-- Start at `adapter speed 100` (kHz); if the initial connect fails, drop to
-  `50`/`10` kHz in `/etc/openocd/pico2.cfg`.  sysfs bit-bang is the bottleneck,
-  not the RP2350.
-- RP2350 flashing over bit-bang is slow (minutes) — fine for debugging/light
-  flashing.
-- If the probe dies with `Require swclk and swdio gpio for SWD mode`, the
-  adapter block uses `adapter gpio swclk/swdio` — that syntax belongs to the
-  (uncompiled here) linuxgpiod driver.  This sysfsgpio build registers its own
-  commands: `sysfsgpio swclk_num <n>` / `sysfsgpio swdio_num <n>`.
+- OpenOCD 通过 `/sys/class/gpio` 进行 bit-bang,因此必须以 root 身份运行(`pico2` 辅助脚本在 Lyra 上由 root 调用)。
+- 以 `adapter speed 100`(kHz)起步;如果初始连接失败,请在 `/etc/openocd/pico2.cfg` 中降到 `50`/`10` kHz。瓶颈是 sysfs bit-bang,而不是 RP2350。
+- 通过 bit-bang 烧写 RP2350 较慢(数分钟)— 适合调试/轻量烧写。
+- 如果探测失败并报错 `Require swclk and swdio gpio for SWD mode`,说明 adapter 块使用了 `adapter gpio swclk/swdio` — 该语法属于(此处未编译的)linuxgpiod 驱动。此 sysfsgpio 构建注册了自己的命令:`sysfsgpio swclk_num <n>` / `sysfsgpio swdio_num <n>`。
 
-## SPI communication
+## SPI 通信
 
-The SPI demo shorts MOSI↔MISO locally to prove the bus works:
+SPI 演示脚本在本地短接 MOSI↔MISO,以验证总线工作正常:
 
 ```sh
 # on the Lyra: short RMIO9 to RMIO10 with a jumper, then:
@@ -104,15 +83,11 @@ pico2-spi-demo.py
 # -> "OK: MOSI and MISO are shorted (loopback)"
 ```
 
-For a real two-way link, wire the SPI pins to a Pico 2 SPI slave and use
-`python3 -c 'import spidev; ...'` or any `/dev/spidev1.0` consumer.  `python3`
-and `python-spidev` are already in the rootfs.
+对于真正的双向通信,请将 SPI 引脚连接到 Pico 2 SPI 从设备,并使用 `python3 -c 'import spidev; ...'` 或任何 `/dev/spidev1.0` 的消费者。`python3` 和 `python-spidev` 已包含在 rootfs 中。
 
-## Silicon revision (security)
+## 芯片版本(安全)
 
-The well-known RP2350 secure-boot breaks target the **A2** stepping
-(`SYSINFO_CHIP_ID` = `0x20004927` — the DEF CON 2024 "RP2350 Hacking Challenge"
-chip).  Newer silicon is not affected.  Check a board over SWD:
+广为人知的 RP2350 安全启动漏洞针对 **A2** 步进(`SYSINFO_CHIP_ID` = `0x20004927` — 即 DEF CON 2024 "RP2350 破解挑战赛"的芯片)。更新的芯片不受影响。可通过 SWD 检查一块板子:
 
 ```sh
 # on the Lyra, with the Pico 2 wired:
@@ -120,32 +95,16 @@ openocd -f /etc/openocd/pico2.cfg -c init -c halt \
   -c 'mdw 0x40000000 1' -c 'mdw 0x00000010 1' -c shutdown
 ```
 
-- `0x40000000` (SYSINFO_CHIP_ID): `0x30004927` → revision nibble `0x3` = **A3**
-  stepping (`0x2` = A2, the vulnerable one).
-- `0x00000013` (bootrom version byte): `0x04` → **bootrom v4**.  A3 hardware +
-  v4 bootrom is what the community calls the "A4" revision.
+- `0x40000000`(SYSINFO_CHIP_ID):`0x30004927` → revision 半字节 `0x3` = **A3** 步进(`0x2` = A2,即受影响的那个)。
+- `0x00000013`(bootrom 版本字节):`0x04` → **bootrom v4**。A3 硬件 + v4 bootrom 就是社区所称的 "A4" 版本。
 
-The reference board used for this feature is **A3 + bootrom v4** — not the
-affected A2.
+本特性使用的参考板是 **A3 + bootrom v4** — 而非受影响的 A2。
 
-## How this is wired into the SDK
+## 如何接入 SDK
 
-All pico2 bits are scoped to the `lyra-ultra-w-emmc-pico2` board; the default
-`lyra-ultra-w-emmc` board keeps the plain DTS, a buildroot defconfig without
-openocd, and no pico2 scripts.
+所有 pico2 相关组件都限定在 `lyra-ultra-w-emmc-pico2` 板;默认的 `lyra-ultra-w-emmc` 板保留普通 DTS、不含 openocd 的 buildroot defconfig,并且没有 pico2 脚本。
 
-- **Board config** — `config/boards/lyra-ultra-w-emmc-pico2.mk` (fork of the
-  default emmc config) selects `KERNEL_DTS := rk3506b-luckfox-lyra-ultra-w-pico2`
-  and `BUILDROOT_CFG := rockchip_rk3506_luckfox_pico2`.
-- **Device tree** — `product/platform/dts/rk3506b-luckfox-lyra-ultra-w-pico2.dts`
-  is the board DTS with the `&spi1` spidev node; a FULL build copies
-  `$KERNEL_DTS.dts` over the vendored tree (see `stages/20-kernel/run.sh`).  To
-  iterate on the DTS only:
-  `cp product/platform/dts/rk3506b-luckfox-lyra-ultra-w-pico2.dts vendor/rockchip/kernel/arch/arm/boot/dts/ && make kernel BOARD=lyra-ultra-w-emmc-pico2`.
-- **Buildroot** — `product/platform/configs/buildroot/rockchip_rk3506_luckfox_pico2_defconfig`
-  enables `openocd` + sysfsgpio; the vendored buildroot's `openocd`/`jimtcl`
-  packages were bumped for RP2350 support.
-- **Rootfs overlay** — the config/helper/demo above live in the board-scoped
-  `product/platform/rootfs/overlay-lyra-ultra-w-emmc-pico2/`, merged in by
-  `product/platform/rootfs/post-rootfs.sh` (it applies `overlay-$TARGET` for the
-  active board in addition to the shared `overlay/`).
+- **板配置** — `config/boards/lyra-ultra-w-emmc-pico2.mk`(默认 emmc 配置的分支)选择 `KERNEL_DTS := rk3506b-luckfox-lyra-ultra-w-pico2` 和 `BUILDROOT_CFG := rockchip_rk3506_luckfox_pico2`。
+- **设备树** — `product/platform/dts/rk3506b-luckfox-lyra-ultra-w-pico2.dts` 是带有 `&spi1` spidev 节点的板级 DTS;FULL 构建会将 `$KERNEL_DTS.dts` 复制到 vendored 树(参见 `stages/20-kernel/run.sh`)。如果只想单独迭代 DTS:`cp product/platform/dts/rk3506b-luckfox-lyra-ultra-w-pico2.dts vendor/rockchip/kernel/arch/arm/boot/dts/ && make kernel BOARD=lyra-ultra-w-emmc-pico2`。
+- **Buildroot** — `product/platform/configs/buildroot/rockchip_rk3506_luckfox_pico2_defconfig` 启用 `openocd` + sysfsgpio;vendored buildroot 中的 `openocd`/`jimtcl` 包已升级以支持 RP2350。
+- **Rootfs overlay** — 上述 config/helper/demo 位于板级目录 `product/platform/rootfs/overlay-lyra-ultra-w-emmc-pico2/` 中,由 `product/platform/rootfs/post-rootfs.sh` 合并(除了共享的 `overlay/` 之外,它还会为当前激活的板应用 `overlay-$TARGET`)。

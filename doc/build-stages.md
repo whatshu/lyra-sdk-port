@@ -1,11 +1,8 @@
-# Build stages
+# 构建阶段
 
-The build follows the boot order of the device.  Stages are directories
-`stages/NN-name/` managed by `scripts/build.py`; each has a `stage.yaml`
-(metadata) and a `run.sh` (the recipe).  Python owns lifecycle, bash owns
-the recipe.
+构建过程遵循设备的启动顺序。阶段是目录 `stages/NN-name/`,由 `scripts/build.py` 管理;每个阶段包含一个 `stage.yaml`(元数据)和一个 `run.sh`(配方)。Python 负责生命周期,bash 负责配方。
 
-## Pipeline
+## 流水线
 
 ```
 stages/
@@ -15,35 +12,31 @@ stages/
 └── 40-firmware/  # assemble firmware set + update.img
 ```
 
-A **full build** (`make build`) runs them in dependency order; a
-**partial build** (`make uboot`, …) runs only the named stage and keeps any
-hand-tuned temp config.
+**完整构建**(`make build`)按依赖顺序运行它们;**部分构建**(`make uboot`, …)只运行指定的阶段,并保留任何手动调优的临时配置。
 
-## Config override semantics
+## 配置覆盖语义
 
-| mode | effect on temp config |
+| 模式 | 对临时配置的影响 |
 |---|---|
-| `FULL=1` (build / release) | `product/platform/configs/<comp>` (and `product/custom/<comp>`) are copied over the vendor tree before the stage runs; `.config` is regenerated |
-| `FULL=0` (single stage) | no copy, existing `.config` reused → `make kernel-menuconfig` changes survive |
+| `FULL=1`(构建/发布) | 在阶段运行前,`product/platform/configs/<comp>`(以及 `product/custom/<comp>`)被复制到 vendor 树上;`.config` 被重新生成 |
+| `FULL=0`(单阶段) | 不复制,复用现有的 `.config` → `make kernel-menuconfig` 的改动得以保留 |
 
-The restore points live in `product/platform/configs/`:
+恢复点位于 `product/platform/configs/`:
 
 - `kernel/rk3506_luckfox_defconfig`, `rk3506-display.config`
 - `uboot/rk3506_luckfox_defconfig`, `rk3506b_luckfox.config`
-- `buildroot/` (optional overrides copied over the vendored defconfig)
+- `buildroot/`(可选的覆盖,复制到 vendored defconfig 之上)
 
-## What each stage produces
+## 每个阶段产出什么
 
 ### 10-uboot
-Runs the Rockchip `u-boot/make.sh` flow:
+运行 Rockchip 的 `u-boot/make.sh` 流程:
 
 ```
 ./make.sh CROSS_COMPILE=<toolchain> rk3506_luckfox [rk3506b_luckfox] --spl-new
 ```
 
-It configures (defconfig + fragments), builds u-boot + SPL, then packs
-`rk3506_spl_loader_v1.04.110.bin` (= `MiniLoaderAll.bin`) and `uboot.img`.
-rkbin (DDR/trust blobs) is consumed from `vendor/rockchip/rkbin`.
+它进行配置(defconfig + fragments),构建 u-boot + SPL,然后打包 `rk3506_spl_loader_v1.04.110.bin`(即 `MiniLoaderAll.bin`)和 `uboot.img`。rkbin(DDR/trust 二进制块)从 `vendor/rockchip/rkbin` 中获取。
 
 ### 20-kernel
 ```
@@ -52,7 +45,7 @@ make ARCH=arm CROSS_COMPILE=<toolchain> <dts>.img      # boot.img/zboot.img + re
 make ARCH=arm CROSS_COMPILE=<toolchain> modules
 ```
 
-`scripts/mkimg` needs `mkimage`, provided by `vendor/rockchip/rkbin/tools`.
+`scripts/mkimg` 需要 `mkimage`,由 `vendor/rockchip/rkbin/tools` 提供。
 
 ### 30-rootfs
 ```
@@ -60,43 +53,24 @@ make O=output/<cfg> <cfg>_defconfig
 make O=output/<cfg>
 ```
 
-> **Buildroot output is host-specific.**  The `output/<cfg>/host/` tree contains
-> host tools linked against the *building* machine's glibc; an output produced on
-> one host will fail at `target-finalize` on another (e.g.
-> `glib-compile-schemas: undefined symbol g_task_set_static_name`).  Always build
-> buildroot inside the pinned container from a clean output.  The package sources
-> in the shared `BR2_DL_DIR` cache are reused, so a clean build only re-compiles.
+> **Buildroot 输出是与主机相关的。** `output/<cfg>/host/` 树包含链接到*构建*机器 glibc 的主机工具;在一台主机上生成的输出会在另一台主机上的 `target-finalize` 阶段失败(例如 `glib-compile-schemas: undefined symbol g_task_set_static_name`)。务必在固定的容器内从干净的输出开始构建 buildroot。共享 `BR2_DL_DIR` 缓存中的包源码会被复用,因此干净构建只需重新编译。
 
-buildroot's vendored post-build hook (`board/rockchip/common/post-build.sh`)
-calls our shim `device/rockchip/common/post-build.sh`, which runs
-`product/platform/rootfs/post-rootfs.sh`:
+buildroot 的 vendored post-build hook(`board/rockchip/common/post-build.sh`)调用我们的 shim `device/rockchip/common/post-build.sh`,后者运行 `product/platform/rootfs/post-rootfs.sh`:
 
-- base dirs + convenience symlinks
-- `/etc/fstab` for the root fs type
-- os-release annotation
-- kernel module installation
+- 基础目录 + 便捷符号链接
+- 为 root fs 类型配置的 `/etc/fstab`
+- os-release 标注
+- 内核模块安装
 - `product/platform/rootfs/overlay` + `product/custom/rootfs/overlay`
 - ld.so.cache
 
-The image (`rootfs.ext4` / `rootfs.ubi` / …) is copied to `out/firmware/rootfs.img`.
-The buildroot download cache stays in `vendor/rockchip/buildroot/dl`.
+镜像(`rootfs.ext4` / `rootfs.ubi` / …)被复制到 `out/firmware/rootfs.img`。buildroot 的下载缓存保留在 `vendor/rockchip/buildroot/dl`。
 
 ### 40-firmware
-Collects `MiniLoaderAll.bin`, `uboot.img`, `boot.img`, `rootfs.img` and the
-`parameter.txt` (from `config/image/`) into `out/firmware/`, then packs the
-all-in-one `update.img` with the vendored `afptool` + `rkImageMaker`.  The
-stage also xz-compresses it (`xz -T0 -6`, multi-threaded) into
-`out/firmware/update.img.xz` so the same build is cheap to archive/transfer
-(`make release` compresses its snapshot copies the same way).
+将 `MiniLoaderAll.bin`、`uboot.img`、`boot.img`、`rootfs.img` 以及 `parameter.txt`(来自 `config/image/`)收集到 `out/firmware/`,然后使用 vendored 的 `afptool` + `rkImageMaker` 打包成一体的 `update.img`。该阶段还会用 xz 压缩它(`xz -T0 -6`,多线程)为 `out/firmware/update.img.xz`,使得同一构建在归档/传输时开销更低(`make release` 以相同方式压缩其快照副本)。
 
-For **A/B boards** (`AB=1`, e.g. `lyra-ultra-w-emmc-ab`) the stage duplicates
-`uboot.img`/`boot.img`/`rootfs.img` into `uboot_a/b`, `boot_a/b` and
-`system_a/b`, generates `misc.img` carrying the initial `AvbABData`
-(`tools/scripts/mkabmeta.py`), and the `update.img` package-file lists all
-slot partitions plus `misc` (see `doc/ab-boot.md`).
+对于 **A/B 板卡**(`AB=1`,例如 `lyra-ultra-w-emmc-ab`),该阶段将 `uboot.img`/`boot.img`/`rootfs.img` 复制为 `uboot_a/b`、`boot_a/b` 和 `system_a/b`,生成携带初始 `AvbABData` 的 `misc.img`(`tools/scripts/mkabmeta.py`),并且 `update.img` 的 package-file 列出所有槽位分区外加 `misc`(参见 `doc/ab-boot.md`)。
 
-## Partial build pitfalls
+## 部分构建的陷阱
 
-`make rootfs` requires the kernel to have been built once (modules install).
-`make firmware` requires uboot/kernel/rootfs outputs.  The stage scripts
-fail loudly rather than producing a broken image.
+`make rootfs` 需要内核至少被构建过一次(模块安装)。`make firmware` 需要 uboot/kernel/rootfs 的产物。阶段脚本会明确报错失败,而不是产出损坏的镜像。

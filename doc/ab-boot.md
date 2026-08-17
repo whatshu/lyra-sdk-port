@@ -1,34 +1,21 @@
-# A/B (dual-slot) boot & OTA upgrade — Luckfox Lyra Ultra W
+# A/B(双槽位)启动与 OTA 升级 —— Luckfox Lyra Ultra W
 
-The Lyra Ultra W (RK3506) normally boots a single `uboot` / `boot` / `rootfs`
-layout — an OTA update is all-or-nothing and a bad image bricks the board until
-it is re-flashed over USB.  This board variant (`lyra-ultra-w-emmc-ab`) enables
-**u-boot's native A/B slot boot** (`CONFIG_ANDROID_AB` + the AVB user-space
-libs + SPL A/B), so firmware is upgraded in place and a failed boot **rolls
-back automatically** to the previous slot.
+Lyra Ultra W(RK3506)通常以单一 `uboot` / `boot` / `rootfs` 布局启动——OTA 更新是全有或全无的,坏镜像会让板子变砖,直到通过 USB 重新烧写。该板型变体(`lyra-ultra-w-emmc-ab`)启用了 **u-boot 原生的 A/B 槽位启动**(`CONFIG_ANDROID_AB` + AVB 用户空间库 + SPL A/B),因此固件可以就地升级,启动失败时会**自动回滚**到上一个槽位。
 
-Everything is configured with Rockchip's stock machinery — no u-boot source
-changes.  The on-disk slot state (`AvbABData` in the `misc` partition) is the
-single source of truth shared by SPL, u-boot proper and the user-space
-`abctl` / `ota-update` tools.
+所有内容都使用 Rockchip 的官方机制配置——无需修改 u-boot 源码。磁盘上的槽位状态(`misc` 分区中的 `AvbABData`)是 SPL、u-boot proper 与用户空间 `abctl` / `ota-update` 工具共同依赖的唯一事实来源。
 
-> The default `lyra-ultra-w-emmc` board is untouched — this is a separate
-> board variant, so both can coexist in one build.
+> 默认的 `lyra-ultra-w-emmc` 板不受影响——这是一个独立的板型变体,因此两者可以在一次构建中并存。
 
-## Building
+## 构建
 
 ```sh
 make build   BOARD=lyra-ultra-w-emmc-ab    # full build -> out/firmware/
 make flash   BOARD=lyra-ultra-w-emmc-ab    # device in loader/maskrom mode
 ```
 
-The A/B `update.img` carries **every** slot partition (uboot_a/b, boot_a/b,
-system_a/b, misc) plus the parameter table; `flash.sh` detects the A/B board
-and uses `upgrade_tool uf update.img` (the `di -uboot/-b/-rootfs` flags cannot
-address slot copies).  A fresh flash has slot **a** active (pri=15, tries=7)
-and slot **b** as standby (pri=14, tries=7).
+A/B 的 `update.img` 包含**所有**槽位分区(uboot_a/b、boot_a/b、system_a/b、misc)以及参数表;`flash.sh` 会检测 A/B 板并使用 `upgrade_tool uf update.img`(`di -uboot/-b/-rootfs` 这些 flag 无法寻址槽位副本)。全新烧写后,槽位 **a** 为活动槽(pri=15、tries=7),槽位 **b** 为备用槽(pri=14、tries=7)。
 
-## Boot flow
+## 启动流程
 
 ```mermaid
 flowchart TD
@@ -54,31 +41,16 @@ flowchart TD
     KERNEL -- "panic / hang / power cut<br/>before S99 runs" --> PWR
 ```
 
-Key points:
+要点:
 
-- **SPL A/B** (`CONFIG_SPL_AB=y`) is dormant until a `misc` partition exists;
-  with it present every partition lookup is slot-suffixed (`uboot` →
-  `uboot_a`/`uboot_b`), and SPL picks the slot from `AvbABData`.
-- **u-boot proper** decrements `tries_remaining` once per boot of a slot that
-  has not yet been marked successful (`ab_decrease_tries()` in `board_init`).
-  This is the kernel-level rollback trigger.
-- u-boot injects `root=PARTUUID=<active system slot uuid>` and appends
-  `androidboot.slot_suffix=_a` to the kernel cmdline.  The **same device tree
-  and fstab** serve both slots — the kernel resolves `/dev/root` from `root=`.
-- `S99abctl` marks the booted slot successful once the system demonstrably
-  boots, stopping the tries countdown.  A slot whose boot keeps failing before
-  userspace runs never gets marked and expires.  The script acts **only on
-  `start`** (init calls it via `rcS`): on shutdown (`rcK` calls `S99abctl
-  stop`) it does nothing, so a soft reboot never credits a slot as
-  successful.
+- **SPL A/B**(`CONFIG_SPL_AB=y`)在 `misc` 分区存在之前处于休眠状态;存在时,每次分区查找都会带上槽位后缀(`uboot` → `uboot_a`/`uboot_b`),SPL 从 `AvbABData` 中选择槽位。
+- **u-boot proper** 对尚未标记为成功的槽位,每次启动都会将 `tries_remaining` 减一(`board_init` 中的 `ab_decrease_tries()`)。这是内核层面的回滚触发机制。
+- u-boot 会注入 `root=PARTUUID=<active system slot uuid>`,并向内核命令行追加 `androidboot.slot_suffix=_a`。**同一个设备树和 fstab** 服务于两个槽位——内核从 `root=` 解析 `/dev/root`。
+- 一旦系统确实启动起来,`S99abctl` 就将已启动的槽位标记为成功,从而停止 tries 倒计时。在用户空间运行之前启动一直失败的槽位永远不会被标记,并最终失效。该脚本**只在 `start` 时执行动作**(init 通过 `rcS` 调用它):在关机时(`rcK` 调用 `S99abctl stop`)它什么都不做,因此软重启永远不会把槽位计为成功。
 
-## Upgrade / rollback policy (the "successful_boot" model)
+## 升级/回滚策略(“successful_boot”模型)
 
-A freshly activated slot is `priority=15, tries_remaining=7, successful_boot=0`;
-the other slot drops to `priority=14`.  Every boot of a not-yet-successful slot
-decrements tries (in u-boot).  The slot is **marked successful** once the
-system comes up.  If tries run out (boot keeps failing before userspace), the
-slot becomes *unbootable* and u-boot selects the other slot.
+新激活的槽位是 `priority=15, tries_remaining=7, successful_boot=0`;另一个槽位降为 `priority=14`。尚未成功的槽位每启动一次,tries 都会减一(在 u-boot 中完成)。系统起来后,该槽位就会被**标记为成功**。如果 tries 耗尽(在用户空间运行前启动一直失败),该槽位将变为*不可启动*,u-boot 会选择另一个槽位。
 
 ```mermaid
 flowchart TD
@@ -97,20 +69,14 @@ flowchart TD
     REV --> RB
 ```
 
-- **Automatic rollback**: install a bad slot, reboot, watch it fail, and the
-  previous slot comes back up on its own.
-- **Manual rollback**: `abctl set-other-active` then reboot (e.g. a slot that
-  boots but misbehaves later).
-- **Power-loss safe**: an interrupted slot write only corrupts the slot being
-  written; the other slot is untouched and remains bootable.
-- **Shared state**: `userdata` (mounted at `/userdata`, symlinked as `/data`)
-  is outside the slots, so a switch never touches runtime data or web-UI state.
+- **自动回滚**:安装一个有问题的槽位,重启,看它失败,然后上一个槽位会自行恢复启动。
+- **手动回滚**:执行 `abctl set-other-active` 然后重启(例如某个槽位能启动但之后行为异常)。
+- **断电安全**:槽位写入被中断只会损坏正在写入的那个槽位;另一个槽位不受影响,仍然可以启动。
+- **状态共享**:`userdata`(挂载在 `/userdata`,符号链接为 `/data`)位于槽位之外,因此切换槽位绝不会影响运行时数据或 web-UI 状态。
 
-## OTA entry point (web-ready)
+## OTA 入口(web 就绪)
 
-`ota-update` is the upgrade CLI and is deliberately web-callable: JSON on
-stdout, progress on stderr, no state of its own.  A future web UI only needs to
-upload an image and exec it.
+`ota-update` 是升级 CLI,并且刻意设计为可被 web 调用:JSON 输出到 stdout,进度输出到 stderr,自身不保存任何状态。未来的 web UI 只需要上传镜像并执行它即可。
 
 ```mermaid
 sequenceDiagram
@@ -134,13 +100,11 @@ sequenceDiagram
     end
 ```
 
-## Partition layout — `config/image/parameter-lyra-emmc-ab.txt`
+## 分区布局 —— `config/image/parameter-lyra-emmc-ab.txt`
 
-512-byte sectors, GPT (eMMC → `mmcblk0p1..p8`).  The `uuid:` lines give
-`system_a` / `system_b` / `userdata` stable PARTUUIDs, which is how u-boot
-injects `root=PARTUUID=` for the booted slot.
+512 字节扇区,GPT(eMMC → `mmcblk0p1..p8`)。`uuid:` 行赋予 `system_a` / `system_b` / `userdata` 稳定的 PARTUUID,这正是 u-boot 为已启动槽位注入 `root=PARTUUID=` 的方式。
 
-| # | name      | start (sector) | size (sectors) | size      | holds |
+| # | 名称 | 起始(扇区) | 大小(扇区) | 大小 | 存放内容 |
 |---|-----------|---------------:|---------------:|-----------|-------|
 | 1 | uboot_a   | 0x2000         | 0x2000         | 4 MiB     | SPL + u-boot FIT |
 | 2 | uboot_b   | 0x4000         | 0x2000         | 4 MiB     | SPL + u-boot FIT |
@@ -149,68 +113,62 @@ injects `root=PARTUUID=` for the booted slot.
 | 5 | boot_b    | 0xe000         | 0x6000         | 12 MiB    | Android boot image |
 | 6 | system_a  | 0x14000        | 0x200000       | 1 GiB     | rootfs (ext4) |
 | 7 | system_b  | 0x214000       | 0x200000       | 1 GiB     | rootfs (ext4) |
-| 8 | userdata  | 0x414000       | grow           | ~rest     | shared runtime data |
+| 8 | userdata  | 0x414000       | grow           | ~rest     | 共享运行时数据 |
 
-Partition names are `system_a/b` (not `rootfs_a/b`) because u-boot's
-`ab_update_root_partition()` looks up `system` and slot-suffixes it.
+分区名是 `system_a/b`(不是 `rootfs_a/b`),因为 u-boot 的 `ab_update_root_partition()` 会查找 `system` 并为其加上槽位后缀。
 
-## AvbABData — the shared metadata
+## AvbABData —— 共享元数据
 
-A 32-byte struct, big-endian, stored at **byte offset 2048** of the `misc`
-partition (`AB_METADATA_OFFSET`; matches `include/android_avb/avb_ab_flow.h`):
+一个 32 字节的结构体,大端序,存储在 `misc` 分区的**字节偏移 2048** 处(`AB_METADATA_OFFSET`;与 `include/android_avb/avb_ab_flow.h` 一致):
 
 ```
 offset  size  field
-0       4     magic      "\0AB0"
-4       1     version_major    1
-5       1     version_minor    0
-6       2     reserved
-8       4     slot a     priority | tries_remaining | successful_boot | reserved
-12      4     slot b     priority | tries_remaining | successful_boot | reserved
-16      1     last_boot  (emergency fallback slot)
-17      11    reserved
-28      4     crc32      big-endian CRC32 of bytes 0..27
+0       4      magic      "\0AB0"
+4       1      version_major    1
+5       1      version_minor    0
+6       2      reserved
+8       4      slot a     priority | tries_remaining | successful_boot | reserved
+12      4      slot b     priority | tries_remaining | successful_boot | reserved
+16      1      last_boot  (emergency fallback slot)
+17      11     reserved
+28      4      crc32      big-endian CRC32 of bytes 0..27
 ```
 
-Initial (fresh flash) values — identical to u-boot's `avb_ab_data_init()` and
-what `tools/scripts/mkabmeta.py` generates:
+初始(全新烧写)值——与 u-boot 的 `avb_ab_data_init()` 以及 `tools/scripts/mkabmeta.py` 生成的值一致:
 
-| field | value |
+| 字段 | 值 |
 |---|---|
 | slot a | priority=15, tries=7, successful=0 |
 | slot b | priority=14, tries=7, successful=0 |
 | last_boot | 0 |
 
-`successful_boot=1` is only ever written together with `tries_remaining=0`; a
-slot with `tries>0 && successful` is treated as *unbootable* by u-boot.
+`successful_boot=1` 只会与 `tries_remaining=0` 一起写入;`tries>0 && successful` 的槽位会被 u-boot 视为*不可启动*。
 
-## Tools on the device
+## 设备上的工具
 
-### `abctl` — boot control (root)
+### `abctl` —— 启动控制(root)
 
-Reads/writes `AvbABData` via the `misc` partition and parses the GPT directly
-(the rootfs has no udev), so it works with no extra packages.
+通过 `misc` 分区读写 `AvbABData`,并直接解析 GPT(rootfs 中没有 udev),因此无需额外软件包即可工作。
 
-| command | effect |
+| 命令 | 作用 |
 |---|---|
-| `abctl status` | JSON: current slot, per-slot priority/tries/successful/bootable, active `root=PARTUUID`, misc device |
-| `abctl mark-success` | set the booted slot `tries=0, successful=1` (idempotent) |
-| `abctl set-active a\|b` | make a slot active: `pri=15, tries=7, succ=0`; other → `pri=14` |
-| `abctl set-other-active` | promote the *inactive* slot (manual rollback) |
-| `abctl find-part <name>` | resolve a GPT partition name → `/dev/mmcblkNpM` |
-| `abctl ensure-userdata` | format `userdata` (ext4) on first boot, then mount `/userdata` |
+| `abctl status` | JSON:当前槽位、各槽位的 priority/tries/successful/bootable、活动 `root=PARTUUID`、misc 设备 |
+| `abctl mark-success` | 将已启动槽位设为 `tries=0, successful=1`(幂等) |
+| `abctl set-active a\|b` | 使某槽位成为活动槽:`pri=15, tries=7, succ=0`;另一个 → `pri=14` |
+| `abctl set-other-active` | 提升*非活动*槽位(手动回滚) |
+| `abctl find-part <name>` | 将 GPT 分区名解析为 → `/dev/mmcblkNpM` |
+| `abctl ensure-userdata` | 首次启动时格式化 `userdata`(ext4),然后挂载 `/userdata` |
 
-`S10mount-userdata` runs `ensure-userdata` at boot; `S99abctl` runs
-`mark-success`.
+`S10mount-userdata` 在启动时执行 `ensure-userdata`;`S99abctl` 执行 `mark-success`。
 
-### `ota-update` — upgrade entry point
+### `ota-update` —— 升级入口
 
-| command | effect |
+| 命令 | 作用 |
 |---|---|
-| `ota-update status` | same JSON as `abctl status` |
-| `ota-update apply --rootfs f.img [--boot b.img] [--target a\|b] [--dry-run]` | write images into the inactive slot (or `--target`), check they fit, then promote the slot |
+| `ota-update status` | 与 `abctl status` 相同的 JSON |
+| `ota-update apply --rootfs f.img [--boot b.img] [--target a\|b] [--dry-run]` | 将镜像写入非活动槽位(或 `--target` 指定的槽位),检查大小是否合适,然后提升该槽位 |
 
-Example:
+示例:
 
 ```sh
 ota-update apply --rootfs /userdata/ota/rootfs.img
@@ -218,83 +176,40 @@ ota-update apply --rootfs /userdata/ota/rootfs.img
 reboot
 ```
 
-## Flashing
+## 烧写
 
-`flash.sh` detects the A/B board (`AB := 1` in the board config) and flashes
-the whole image: `upgrade_tool uf update.img`.  The device must be in loader or
-maskrom mode (`make flash` prints how).  Re-flashing is always possible — the
-loader's USB download function is always present, even with a broken rootfs.
+`flash.sh` 会检测 A/B 板(board config 中的 `AB := 1`)并烧写整个镜像:`upgrade_tool uf update.img`。设备必须处于 loader 或 maskrom 模式(`make flash` 会打印具体方法)。随时都可以重新烧写——loader 的 USB 下载功能始终存在,即使 rootfs 已损坏。
 
-## How this is wired into the SDK
+## 如何接入 SDK
 
-All A/B bits are scoped to the `lyra-ultra-w-emmc-ab` board; the default
-`lyra-ultra-w-emmc` board is byte-for-byte unchanged.
+所有 A/B 相关配置都限定在 `lyra-ultra-w-emmc-ab` 板上;默认的 `lyra-ultra-w-emmc` 板逐字节保持不变。
 
-- **Board config** — `config/boards/lyra-ultra-w-emmc-ab.mk` sets
-  `AB := 1`, the A/B u-boot fragment, the A/B device tree, the A/B buildroot
-  defconfig and the A/B parameter file.
-- **Partition table** — `config/image/parameter-lyra-emmc-ab.txt`
-  (8 partitions + `uuid:` PARTUUID lines).
-- **u-boot** — `product/platform/configs/uboot/rk3506b_luckfox_ab.config`
-  (mirrors Rockchip's `rv1126-ab.config`: `CONFIG_ANDROID_AB` + the AVB
-  user-space libs; no vbmeta key verification, so no signing chain is needed).
-- **Device tree** — `product/platform/dts/rk3506b-luckfox-lyra-ultra-w-ab.dts`
-  (no fixed `root=`: u-boot injects `root=PARTUUID` per slot).
-- **Buildroot** — `product/platform/configs/buildroot/rockchip_rk3506_luckfox_ab_defconfig`
-  (default + e2fsprogs for the userdata auto-format).
-- **Firmware assembly** — `stages/40-firmware/run.sh` duplicates slot images,
-  generates `misc.img` (`tools/scripts/mkabmeta.py`) and packs an update.img
-  listing all slot partitions.
-- **Rootfs overlay** — `product/platform/rootfs/overlay-lyra-ultra-w-emmc-ab/`
-  ships `abctl`, `ota-update` and the `S10`/`S99` init scripts; merged by
-  `post-rootfs.sh` (`overlay-$TARGET`).
-- **Flashing** — `tools/scripts/flash.sh` uses `upgrade_tool uf` for A/B
-  boards.
+- **板配置** —— `config/boards/lyra-ultra-w-emmc-ab.mk` 设置 `AB := 1`、A/B u-boot 片段、A/B 设备树、A/B buildroot defconfig 以及 A/B 参数文件。
+- **分区表** —— `config/image/parameter-lyra-emmc-ab.txt`(8 个分区 + `uuid:` PARTUUID 行)。
+- **u-boot** —— `product/platform/configs/uboot/rk3506b_luckfox_ab.config`(与 Rockchip 的 `rv1126-ab.config` 对应:`CONFIG_ANDROID_AB` + AVB 用户空间库;不进行 vbmeta 密钥验证,因此无需签名链)。
+- **设备树** —— `product/platform/dts/rk3506b-luckfox-lyra-ultra-w-ab.dts`(没有固定的 `root=`:u-boot 按槽位注入 `root=PARTUUID`)。
+- **Buildroot** —— `product/platform/configs/buildroot/rockchip_rk3506_luckfox_ab_defconfig`(默认配置 + e2fsprogs 用于 userdata 自动格式化)。
+- **固件组装** —— `stages/40-firmware/run.sh` 复制槽位镜像,生成 `misc.img`(`tools/scripts/mkabmeta.py`),并打包列出所有槽位分区的 update.img。
+- **Rootfs overlay** —— `product/platform/rootfs/overlay-lyra-ultra-w-emmc-ab/` 提供 `abctl`、`ota-update` 以及 `S10`/`S99` init 脚本;由 `post-rootfs.sh`(`overlay-$TARGET`)合并。
+- **烧写** —— `tools/scripts/flash.sh` 对 A/B 板使用 `upgrade_tool uf`。
 
-## Hardware verification (2026-08-13)
+## 硬件验证(2026-08-13)
 
-All three upgrade/rollback paths were exercised on a physical Lyra Ultra W
-(serial `/dev/ttyACM2` @ 1.5 Mbaud, USB CDC-ECM network `192.168.123.100`,
-boot logs captured over serial, metadata read back over SSH):
+三条升级/回滚路径都在一台实体的 Lyra Ultra W 上进行了验证(串口 `/dev/ttyACM2`,速率 1.5 Mbaud,USB CDC-ECM 网络 `192.168.123.100`,启动日志通过串口抓取,元数据通过 SSH 读回):
 
-1. **`ota-update apply` → boots the new slot.** An image was written to the
-   inactive `system_b`, the slot promoted, and on reboot u-boot selected `_b`
-   (`root=PARTUUID=d7891b4a…`, `androidboot.slot_suffix=_b`); the rootfs was
-   resized on first boot and its marker file was present. u-boot had
-   decremented `_b` tries 7 → 6.
-2. **Automatic rollback on a failed slot.** `uboot_a` was zeroed and slot a set
-   to `tries=1`. Reboot: SPL picked `_a` and the u-boot FIT load failed
-   (`Not fit magic`) → `spl_ab_decrease_reset()` decremented tries 1 → 0 and
-   reset the board — then SPL picked `_b` and booted it. No user action, no
-   re-flash. After the fallback the metadata read exactly as designed:
-   `a=(0,0,0)` (unbootable), `b=(14,0,1)` (successful).
-3. **Manual rollback (`abctl set-other-active`).** From slot b, promoted a
-   (`a=(15,7,0)`, `b=(14,7,0)`); on reboot SPL loaded the restored `uboot_a`,
-   booted `system_a` (`root=PARTUUID=f372dce4…`) and `S99abctl` marked it
-   successful → `a=(15,0,1)`, `b=(14,7,0)`.
+1. **`ota-update apply` → 启动新槽位。** 将镜像写入非活动的 `system_b`,提升该槽位,重启后 u-boot 选择了 `_b`(`root=PARTUUID=d7891b4a…`、`androidboot.slot_suffix=_b`);rootfs 在首次启动时被调整大小,其标记文件存在。u-boot 已将 `_b` 的 tries 从 7 减为 6。
+2. **失败槽位上的自动回滚。** 将 `uboot_a` 清零,并把槽位 a 设为 `tries=1`。重启:SPL 选择了 `_a`,u-boot FIT 加载失败(`Not fit magic`)→ `spl_ab_decrease_reset()` 将 tries 从 1 减为 0 并复位板子——随后 SPL 选择了 `_b` 并启动它。无需用户操作,无需重新烧写。回退之后元数据读取结果完全符合设计:`a=(0,0,0)`(不可启动)、`b=(14,0,1)`(成功)。
+3. **手动回滚(`abctl set-other-active`)。** 从槽位 b 提升 a(`a=(15,7,0)`、`b=(14,7,0)`);重启后 SPL 加载了恢复后的 `uboot_a`,启动 `system_a`(`root=PARTUUID=f372dce4…`),`S99abctl` 将其标记为成功 → `a=(15,0,1)`、`b=(14,7,0)`。
 
-Two bugs were found and fixed while testing:
+测试过程中发现并修复了两个 bug:
 
-- **`S99abctl` marked the slot successful on shutdown.** The script had no
-  `case "$1" in`, so at shutdown `/etc/init.d/rcK` ran `S99abctl stop`, which
-  ran `mark-success` unconditionally — a soft reboot credited the slot for
-  merely reaching init and broke the tries countdown (and with it automatic
-  rollback).  Fixed by acting only on `start`.
-- **`abctl status` crashed on the first flashed image** (a Python ternary
-  precedence bug in `load_status`).  Fixed; the corrected `abctl` was also
-  written into both on-disk rootfs.
+- **`S99abctl` 在关机时把槽位标记为成功。** 脚本没有 `case "$1" in`,因此在关机时 `/etc/init.d/rcK` 会执行 `S99abctl stop`,后者无条件地运行 `mark-success`——软重启仅仅因为到达 init 就把槽位计为成功,破坏了 tries 倒计时(以及随之而来的自动回滚)。修复方式:只在 `start` 时执行动作。
+- **`abctl status` 在首次烧写的镜像上崩溃**(`load_status` 中的 Python 三元运算符优先级 bug)。已修复;修正后的 `abctl` 也已写入两个磁盘上的 rootfs。
 
-Device state left after the tests: slot **a** active and successful (`15,0,1`),
-slot **b** a clean standby (`14,7,0`), `uboot_a`/`uboot_b` identical
-(restored), `userdata` mounted at `/userdata`.
+测试后设备的状态:槽位 **a** 活动且成功(`15,0,1`),槽位 **b** 干净的备用(`14,7,0`),`uboot_a`/`uboot_b` 一致(已恢复),`userdata` 挂载在 `/userdata`。
 
-## Design notes / limitations
+## 设计说明/限制
 
-- **No verified boot**: `libavb` is present but vbmeta key validation is off —
-  the A/B metadata works without a chain of trust.  Adding AVB signing is a
-  separate project and does not change the storage layer.
-- **Payload format**: `ota-update` currently takes raw slot images.  Version
-  checks, signing and differential payloads are future work and can sit behind
-  the same CLI.
-- **Web UI**: not included (out of scope) — `ota-update` is the boundary a
-  future HTTP handler calls.
+- **无验证启动**:存在 `libavb`,但 vbmeta 密钥验证关闭——A/B 元数据在没有信任链的情况下也能工作。添加 AVB 签名是另一个独立项目,且不会改变存储层。
+- **负载格式**:`ota-update` 目前接收原始槽位镜像。版本检查、签名和差分负载属于未来工作,可以放在同一个 CLI 之后。
+- **Web UI**:不包含(超出范围)——`ota-update` 是未来 HTTP handler 调用的边界。

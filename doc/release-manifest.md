@@ -1,10 +1,9 @@
-# Releases
+# 发布
 
-`make release` produces an immutable, self-describing snapshot on disk.
-`RELEASE_NOTES.md` in each release is copied from
-`config/release-notes/<target>.md` (a placeholder is written when a board has
-no template), so each board carries its own feature description next to the
-machinery that ships it:
+`make release` 在磁盘上生成一个不可变、自我描述的快照。每个发布中的
+`RELEASE_NOTES.md` 从 `config/release-notes/<target>.md` 复制而来
+(当开发板没有模板时会写入一个占位符),因此每块开发板都在随附的机制旁携带
+自己的功能说明:
 
 ```
 RELEASE/
@@ -23,14 +22,14 @@ RELEASE/
         └── sha256sums.txt
 ```
 
-Releases are kept on the *hard disk*, never in the volatile `out/` tree.
-`make build` writes the same firmware to `out/firmware/` but does **not**
-save it — repeated full builds overwrite each other.  Only `release`
-persists, and each release is self-describing so CI can archive or diff it.
+发布保存在*硬盘*上,绝不会放在易失的 `out/` 目录树中。`make build` 会将
+同样的固件写入 `out/firmware/`,但**不会**保存它——重复的完整构建会相互
+覆盖。只有 `release` 会持久保留,而且每个发布都是自我描述的,因此 CI 可以
+归档或对其做 diff。
 
-The 10 most recent releases per target are retained.
+每个目标保留最近 10 个发布。
 
-## release.xml schema
+## release.xml 结构
 
 ```xml
 <release name="lyra-ultra-w-emmc" time="2026-08-04T21:00:00+0800"
@@ -56,8 +55,7 @@ The 10 most recent releases per target are retained.
 </release>
 ```
 
-`<repos>` records the exact commit of every vendored component and of the
-product manifest itself — a release is reproducible from the manifest alone
-by checking out those commits.  `<environment>` records the container image,
-its id, and the nix/toolchain hashes.  `<artifacts>` carries a sha256 per
-file, mirrored in `firmware/sha256sums.txt`.
+`<repos>` 记录每个随附组件以及产品清单本身的精确提交——只需检出这些提交,
+即可仅凭清单重现一个发布。`<environment>` 记录容器镜像、其 id 以及
+nix/工具链哈希。`<artifacts>` 为每个文件携带一个 sha256,并镜像到
+`firmware/sha256sums.txt`。
