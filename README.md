@@ -137,7 +137,8 @@ make clean                             # 丢弃 out/
 **自动回滚**。共享的 `userdata` 分区在槽位切换中幸存。设备上:`abctl status` /
 `abctl set-other-active`,以及 `ota-update apply --rootfs rootfs.img`——OTA CLI 可被
 web 调用(JSON),为未来的升级 UI 做准备。完整的启动流程/回滚/OTA 图见
-`doc/ab-boot.md`。
+`doc/ab-boot.md`;u-boot 启动链(BootROM → SPL → u-boot proper)与 A/B 槽位选择
+的源码阅读路线见 [`doc/uboot-startup.md`](doc/uboot-startup.md)。
 
 ## SPI NAND 上的 A/B 启动(Lyra Zero W)
 
