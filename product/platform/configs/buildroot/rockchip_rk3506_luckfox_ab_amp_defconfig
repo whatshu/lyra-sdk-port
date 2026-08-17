@@ -24,6 +24,11 @@ BR2_PACKAGE_LIBCURL=y
 BR2_PACKAGE_OPENSSH=y
 BR2_PACKAGE_OPENSSH_GEN_KEYS=y
 BR2_PACKAGE_PYTHON3=y
+# python3 zlib module — required by abctl/ota-update for the AvbABData CRC32
+# (import zlib).  The slim core dropped it, so mark-success crashed with
+# "ModuleNotFoundError: No module named 'zlib'" and the booted slot was never
+# marked successful (tries_remaining kept decrementing every boot).
+BR2_PACKAGE_PYTHON3_ZLIB=y
 BR2_PACKAGE_RK3506=y
 BR2_PACKAGE_RKWIFIBT_APP=y
 BR2_PACKAGE_UTIL_LINUX_AGETTY=y
