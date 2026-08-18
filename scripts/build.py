@@ -94,9 +94,11 @@ def main(argv=None) -> int:
 
     run_stages(ctx, stages, names=None, full=True)
 
-    # sanity: firmware was produced
+    # sanity: firmware was produced.  The exact set is board-defined (REQUIRED
+    # in the board config); pico boards need download.bin/idblock.img/env.img
+    # and the oem/userdata images instead of MiniLoaderAll.bin/parameter.txt.
     fw = ctx.fw
-    required = ["MiniLoaderAll.bin", "uboot.img", "boot.img", "rootfs.img"]
+    required = ctx.board.get("REQUIRED", "MiniLoaderAll.bin uboot.img boot.img rootfs.img").split()
     for name in required:
         if not (fw / name).exists():
             die(f"full build finished but {name} is missing from out/firmware")

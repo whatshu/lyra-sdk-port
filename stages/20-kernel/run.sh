@@ -8,6 +8,16 @@ set -euo pipefail
 
 cd "$VENDOR_DIR/kernel"
 
+# Boards may not carry kernel config fragments (pico boards don't); the
+# vendor trees for pico live OUTSIDE the bind-mounted /sdk (symlinked
+# mirrors), so tell git it may run there (setlocalversion etc.).
+KERNEL_FRAGMENTS="${KERNEL_FRAGMENTS:-}"
+BOOT_COMPRESSED="${BOOT_COMPRESSED:-}"
+if [ "${VENDOR:-rockchip}" = "pico" ]; then
+    git config --global --add safe.directory "$(readlink -f "$VENDOR_DIR/kernel")" \
+        2>/dev/null || true
+fi
+
 # Centralised board-DTS override: on a FULL build a file at
 # product/platform/dts/$KERNEL_DTS.dts replaces the vendored board dts
 # (mirrors the config-override behaviour of the other stages).
@@ -26,12 +36,27 @@ export PATH="$VENDOR_DIR/rkbin/tools:$PATH"
 
 KMAKE=(make ARCH="$KERNEL_ARCH" CROSS_COMPILE="$TOOLCHAIN_PREFIX" -j"$NPROC")
 
-# Regenerate .config on a full build (or first partial build).
-if [ "$FULL" = "1" ] || [ ! -f .config ]; then
-    "${KMAKE[@]}" "$KERNEL_CFG" $KERNEL_FRAGMENTS
+# Regenerate .config on a full build (or first partial build).  The pico
+# kernel flow (official sysdrv) starts from `make mrproper` so no stale
+# in-tree objects survive a config change; the lyra tree is also built
+# in-tree but its configs are stable per board, so it keeps the plain
+# defconfig regen.
+if [ "${VENDOR:-rockchip}" = "pico" ]; then
+    if [ "$FULL" = "1" ]; then
+        make ARCH="$KERNEL_ARCH" mrproper
+    fi
+    if [ "$FULL" = "1" ] || [ ! -f .config ]; then
+        "${KMAKE[@]}" "$KERNEL_CFG" $KERNEL_FRAGMENTS
+    fi
+    # FIT boot image: scripts/mkimg builds boot.img from the kernel + dts
+    # using the vendored boot.its (official flow passes BOOT_ITS explicitly).
+    "${KMAKE[@]}" BOOT_ITS="$VENDOR_DIR/kernel/boot.its" "$KERNEL_DTS.img"
+else
+    if [ "$FULL" = "1" ] || [ ! -f .config ]; then
+        "${KMAKE[@]}" "$KERNEL_CFG" $KERNEL_FRAGMENTS
+    fi
+    "${KMAKE[@]}" "$KERNEL_DTS.img"
 fi
-
-"${KMAKE[@]}" "$KERNEL_DTS.img"
 
 # Kernel modules are installed into the rootfs by the buildroot
 # post-build stage; build them here so they are ready.

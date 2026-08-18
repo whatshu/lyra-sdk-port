@@ -93,8 +93,12 @@ make flash
 | `lyra-ultra-w-emmc-ab-amp` | Lyra Ultra W (RK3506B) | eMMC (A/B + AMP) | `parameter-lyra-emmc-ab-amp.txt` |
 | `lyra-zero-w-sdmmc` / `lyra-zero-w-spinand` | Lyra Zero W (RK3506B) | SD / NAND | `parameter-lyra-sdmmc.txt` |
 | `lyra-zero-w-spinand-ab-amp` | Lyra Zero W (RK3506B) | SPI NAND (A/B + AMP),TF 数据 | `parameter-lyra-spinand-ab-amp.txt` |
+| `pico-ultra` | Luckfox Pico Ultra (RV1106G3) | eMMC | `PART_CMD` (env/idblock/uboot/boot/oem/userdata/rootfs) |
+| `webbee-spinand` / `webbee-sdmmc` | Luckfox Webbee (RV1103) | SPI NAND / SD | 同上 |
 
 同一核心构建所有 Lyra variant;新增一块板就是在 `config/boards/` 里加一个小文件。
+Pico 家族(RV1106/RV1103)走同一条 stage 管线,但使用独立的 `vendor/pico/` vendor
+树与官方 uclibc 工具链(见下文)。
 
 ## 常用命令
 
@@ -128,6 +132,16 @@ make clean                             # 丢弃 out/
 (rootfs 里有 python-spidev)。设备上:`pico2 info`、`pico2 flash <img>`、
 `pico2-spi-demo.py`。精确接线见 `doc/pico2.md`(Luckfox RMIO 引脚 → Pico 2 SWD 调试
 焊盘 + SPI)。
+
+## Luckfox Pico (RV1106 / RV1103)
+
+Lyra 之外,SDK 同样支持 Luckfox Pico 家族:`pico-ultra`(RV1106G3,eMMC)、
+`webbee-spinand` / `webbee-sdmmc`(RV1103)。构建、烧写与 Lyra 完全一致
+(`make build BOARD=pico-ultra`、`make flash BOARD=pico-ultra`),产物是官方的
+`update.img` 格式(env/idblock/uboot/boot/oem/userdata/rootfs 分区布局不变,oem/userdata
+以空镜像占位)。rootfs 为**精简核心**(ssh + 基础工具,不含媒体/应用/WiFi),串口
+1500000 8N1,登录 `root`/`luckfox`。差异点(官方 uclibc 8.3 工具链、u-boot 两步构建、
+FIT boot.img、ubifs 配方)见 `doc/pico.md`。
 
 ## A/B(双槽)启动 + OTA 升级
 

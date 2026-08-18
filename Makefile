@@ -1,4 +1,4 @@
-# shu-sdk — minimal Luckfox Lyra (RK3506) build system.
+# shu-sdk — minimal Luckfox build system (Lyra RK3506 / Pico RV1106-RV1103).
 #
 # Everything that compiles runs inside the pinned ubuntu 22.04 build
 # container (tools/docker/).  Host-side git/container plumbing stays on
@@ -8,15 +8,32 @@ SHELL        := /bin/bash
 BOARD        ?= lyra-ultra-w-emmc
 .DEFAULT_GOAL := help
 
+# Board-config-derived defaults used by the menuconfig helpers below
+# (the build stages get these through scripts/config.py + context.py).
+VENDOR        := $(shell sed -n 's/^[[:space:]]*VENDOR[[:space:]]*[:=]\{1,2\}[[:space:]]*//p' config/boards/$(BOARD).mk | head -1)
+VENDOR        := $(if $(VENDOR),$(VENDOR),rockchip)
+TC_PREFIX     := $(if $(filter pico,$(VENDOR)),arm-rockchip830-linux-uclibcgnueabihf-,arm-none-linux-gnueabihf-)
+KERNEL_ARCH   := $(shell sed -n 's/^[[:space:]]*KERNEL_ARCH[[:space:]]*[:=]\{1,2\}[[:space:]]*//p' config/boards/$(BOARD).mk | head -1)
+KERNEL_ARCH   := $(if $(KERNEL_ARCH),$(KERNEL_ARCH),arm)
+BUILDROOT_CFG := $(shell sed -n 's/^[[:space:]]*BUILDROOT_CFG[[:space:]]*[:=]\{1,2\}[[:space:]]*//p' config/boards/$(BOARD).mk | head -1)
+
 # All build work runs inside the container; the SDK root is bind-mounted
 # at /sdk so outputs persist on the host.
 DOCKER       := tools/docker/run.sh
+
+# Interim: the pico vendor trees are symlinks to local mirrors OUTSIDE the
+# repo (until the GitHub repos exist and they become submodules).  The
+# build container only sees /sdk, so the mirrors' directory must be
+# mounted at the same absolute path — derived here from the symlink
+# target.  Override SDK_EXTRA_MOUNT if the mirrors live elsewhere.
+PICO_MIRRORS_DIR := $(shell dirname $$(readlink -f vendor/pico/u-boot 2>/dev/null) 2>/dev/null || true)
+export SDK_EXTRA_MOUNT ?= $(if $(filter pico,$(VENDOR)),$(PICO_MIRRORS_DIR),)
 
 STAGES       := uboot kernel rootfs firmware
 
 .PHONY: help
 help:
-	@echo "shu-sdk — Luckfox Lyra (RK3506) build system"
+	@echo "shu-sdk — Luckfox Lyra (RK3506) / Pico (RV1106-RV1103) build system"
 	@echo
 	@echo "Setup (host):"
 	@echo "  make setup              sync git submodules (needs GH access)"
@@ -36,7 +53,8 @@ help:
 	@echo
 	@echo "Device:"
 	@echo "  make list-boards list-stages"
-	@echo "  make flash              flash the latest update.img (needs device in loader mode)"
+	@echo "  make flash BOARD=x      flash the latest update.img (device in loader mode)"
+	@echo "  make pico               Luckfox Pico family quick reference"
 
 # ---------------------------------------------------------------------------
 # Host-side plumbing
@@ -91,11 +109,11 @@ clean:
 
 .PHONY: uboot-menuconfig kernel-menuconfig buildroot-menuconfig
 uboot-menuconfig:
-	RUN_INTERACTIVE=1 $(DOCKER) bash -lc 'cd vendor/rockchip/u-boot && make CROSS_COMPILE=$${TOOLCHAIN_PREFIX} menuconfig && ./make.sh CROSS_COMPILE=$${TOOLCHAIN_PREFIX} --spl-new'
+	RUN_INTERACTIVE=1 $(DOCKER) bash -lc 'cd vendor/$(VENDOR)/u-boot && make CROSS_COMPILE=$(TC_PREFIX) menuconfig && ./make.sh CROSS_COMPILE=$(TC_PREFIX) --spl-new'
 kernel-menuconfig:
-	RUN_INTERACTIVE=1 $(DOCKER) bash -lc 'cd vendor/rockchip/kernel && make ARCH=$${KERNEL_ARCH} CROSS_COMPILE=$${TOOLCHAIN_PREFIX} menuconfig'
+	RUN_INTERACTIVE=1 $(DOCKER) bash -lc 'cd vendor/$(VENDOR)/kernel && make ARCH=$(KERNEL_ARCH) CROSS_COMPILE=$(TC_PREFIX) menuconfig'
 buildroot-menuconfig:
-	RUN_INTERACTIVE=1 $(DOCKER) bash -lc 'cd vendor/rockchip/buildroot && make O=output/$${BUILDROOT_CFG} menuconfig'
+	RUN_INTERACTIVE=1 $(DOCKER) bash -lc 'test -f /sdk/out/buildroot-$(BUILDROOT_CFG)/.config || { echo "run make build BOARD=$(BOARD) first"; exit 1; }; cd vendor/$(VENDOR)/buildroot && make O=/sdk/out/buildroot-$(BUILDROOT_CFG) menuconfig'
 
 # ---------------------------------------------------------------------------
 # Device flashing — the software path back to the bootrom.
@@ -118,6 +136,14 @@ pico2:
 	@echo "Pico 2 (RP2350) debug over SWD + SPI — see doc/pico2.md"
 	@echo "  Build the board variant:  make build BOARD=lyra-ultra-w-emmc-pico2"
 	@echo "  ssh -p 10024 root@127.0.0.1   # then on the Lyra: pico2 info / pico2 flash <img>"
+
+.PHONY: pico
+pico:
+	@echo "Luckfox Pico (RV1106/RV1103) — see doc/pico.md"
+	@echo "  Boards:   pico-ultra (RV1106G3, eMMC) / webbee-spinand / webbee-sdmmc (RV1103)"
+	@echo "  Build:    make build BOARD=pico-ultra"
+	@echo "  Flash:    make flash BOARD=pico-ultra   # board in loader/maskrom mode"
+	@echo "  Console:  USB serial 1500000 baud 8N1 (ttyFIQ0); ssh root@<ip> / luckfox"
 
 .PHONY: ab
 ab:

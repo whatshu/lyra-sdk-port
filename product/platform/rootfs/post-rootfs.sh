@@ -13,7 +13,10 @@ set -euo pipefail
 
 TARGET_DIR="$1"
 SDK_ROOT="$2"
-VENDOR="$SDK_ROOT/vendor/rockchip"
+# VENDOR_DIR (the active vendor tree) comes from the stage environment; the
+# board's VENDOR name (rockchip|pico) selects per-family rootfs tweaks.
+VENDOR_DIR="${VENDOR_DIR:-$SDK_ROOT/vendor/rockchip}"
+VENDOR_NAME="${VENDOR:-rockchip}"
 PLATFORM="$SDK_ROOT/product/platform/rootfs"
 CUSTOM="$SDK_ROOT/product/custom/rootfs"
 
@@ -80,9 +83,9 @@ echo "RK_BUILD_INFO=\"shu-sdk $(date +%F_%T) - ${BUILDROOT_CFG:-buildroot}\"" >>
 # ---------------------------------------------------------------------------
 # 4. Kernel modules (mirrors post-modules.sh)
 # ---------------------------------------------------------------------------
-if [ -d "$VENDOR/kernel" ] && [ -f "$VENDOR/kernel/.config" ]; then
+if [ -d "$VENDOR_DIR/kernel" ] && [ -f "$VENDOR_DIR/kernel/.config" ]; then
     msg "installing kernel modules"
-    make -C "$VENDOR/kernel" \
+    make -C "$VENDOR_DIR/kernel" \
         ARCH="$ARCH" CROSS_COMPILE="$CROSS" \
         INSTALL_MOD_PATH="$TARGET_DIR" modules_install 2>/dev/null \
         || msg "warning: kernel modules install failed (built kernel first?)"
@@ -101,7 +104,15 @@ for ov in "$PLATFORM/overlay" "$PLATFORM/overlay-$TARGET" "$CUSTOM/overlay"; do
 done
 
 # ---------------------------------------------------------------------------
-# 6. Dynamic linker cache (mirrors post-ldcache.sh)
+# 6. pico (RV1106/RV1103) specifics: nothing to fix here — the official
+# images keep the default buildroot `console` getty (the kernel's
+# CONFIG_FIQ_DEBUGGER_CONSOLE_DEFAULT_ENABLE makes /dev/console the
+# fiq-debugger at 1500000 baud, so the login prompt follows the hardware
+# automatically).
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# 7. Dynamic linker cache (mirrors post-ldcache.sh)
 # ---------------------------------------------------------------------------
 if [ -f "$TARGET_DIR/etc/ld.so.conf" ] && \
    ! [ -f "$TARGET_DIR/etc/ld.so.cache" ]; then
@@ -112,12 +123,12 @@ if [ -f "$TARGET_DIR/etc/ld.so.conf" ] && \
 fi
 
 # ---------------------------------------------------------------------------
-# 7. Publish the (modified) target for the RK image step.
+# 8. Publish the (modified) target for the RK image step.
 # The Rockchip buildroot generates rootfs images from
-# $(TOPDIR)/../output/buildroot/target, i.e. vendor/rockchip/output/buildroot
+# $(TOPDIR)/../output/buildroot/target, i.e. vendor/<name>/output/buildroot
 # (a link to out/), so copy the post-processed target there.
 # ---------------------------------------------------------------------------
-EXTRA_TARGET_DIR="$SDK_ROOT/vendor/rockchip/output/buildroot/target"
+EXTRA_TARGET_DIR="$VENDOR_DIR/output/buildroot/target"
 msg "publishing target to $EXTRA_TARGET_DIR"
 rm -rf "$EXTRA_TARGET_DIR"
 mkdir -p "$(dirname "$EXTRA_TARGET_DIR")"

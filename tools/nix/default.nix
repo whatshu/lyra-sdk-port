@@ -29,7 +29,7 @@ let
     # compression + archiving
     lz4 lzma zstd xz cpio unzip zip rsync tar
     # host utilities
-    kmod file util-linux e2fsprogs coreutils findutils diffutils
+    kmod file util-linux e2fsprogs mtdutils coreutils findutils diffutils
     grep sed which gnutar gzip unifdef
     # crypto headers needed by kernel configs (CONFIG_CRYPTO*)
     openssl openssl.dev libelf

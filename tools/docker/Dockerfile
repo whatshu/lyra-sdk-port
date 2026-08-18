@@ -35,12 +35,13 @@ RUN if [ "$APT_MIRROR" != "archive.ubuntu.com" ]; then \
 # pinned base image + recorded versions keep the set stable.
 # scons + gcc-arm-none-eabi build the AMP firmware (RT-Thread on cpu2 and the
 # M0 HAL responder); see doc/amp.md and stages/40-firmware/run.sh.
+# mtd-utils (mkfs.ubifs/ubinize) builds the pico spi_nand images.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential make cmake ninja-build bison flex \
         python3 perl pkg-config bc gawk patch gettext scons \
         gcc-arm-none-eabi libnewlib-arm-none-eabi \
         device-tree-compiler lz4 xz-utils zstd cpio unzip zip rsync \
-        kmod file e2fsprogs util-linux unifdef bsdmainutils \
+        kmod file e2fsprogs mtd-utils util-linux unifdef bsdmainutils \
         libssl-dev libelf-dev libgmp-dev libmpc-dev libmpfr-dev \
         openssl openssh-client curl wget git ca-certificates \
         locales tzdata \
@@ -60,7 +61,7 @@ RUN ln -sf /usr/bin/python3 /usr/bin/python \
 RUN mkdir -p /etc/shu-sdk && dpkg-query -W > /etc/shu-sdk/packages.txt
 
 # ---- vendor (Rockchip/ARM) cross toolchain -------------------------------
-# build-image.sh stages the sha256-verified tarball into the build context.
+# build-image.sh stages the sha256-verified tarballs into the build context.
 ARG TOOLCHAIN_ARMHF_SHA256
 COPY tools/docker/context/toolchains/armhf.tar.xz /tmp/armhf.tar.xz
 RUN echo "$TOOLCHAIN_ARMHF_SHA256  /tmp/armhf.tar.xz" | sha256sum -c - \
@@ -68,6 +69,19 @@ RUN echo "$TOOLCHAIN_ARMHF_SHA256  /tmp/armhf.tar.xz" | sha256sum -c - \
     && tar -xJf /tmp/armhf.tar.xz -C /opt/toolchains \
     && rm -f /tmp/armhf.tar.xz \
     && find /opt/toolchains -name "*.tar.*" -delete
+
+# ---- Luckfox pico (RV1106/RV1103) uclibc toolchain -----------------------
+# Official arm-rockchip830-linux-uclibcgnueabihf (gcc 8.3) binary release,
+# shipped as a local tarball (no public upstream URL); sha256 pinned.  The
+# tarball is flat (no top-level directory), so it is extracted into its
+# own named directory under /opt/toolchains.
+ARG TOOLCHAIN_ROCKCHIP830_SHA256
+COPY tools/docker/context/toolchains/rockchip830.tar.gz /tmp/rockchip830.tar.gz
+RUN echo "$TOOLCHAIN_ROCKCHIP830_SHA256  /tmp/rockchip830.tar.gz" | sha256sum -c - \
+    && mkdir -p /opt/toolchains/arm-rockchip830-linux-uclibcgnueabihf \
+    && tar -xzf /tmp/rockchip830.tar.gz \
+        -C /opt/toolchains/arm-rockchip830-linux-uclibcgnueabihf \
+    && rm -f /tmp/rockchip830.tar.gz
 ENV SDK_TOOLCHAIN=/opt/toolchains
 
 # buildroot needs a writable home for its git/ccache state

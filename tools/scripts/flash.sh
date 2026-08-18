@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Flash firmware to a Luckfox Lyra board.
+# Flash firmware to a Luckfox board (Lyra RK3506 / Pico RV1106-RV1103).
 #
 # Recovery model (the software path back to the bootrom):
 #   1. The device is in loader mode (Rockchip download mode) or maskrom.
 #      From a *booted* system, `adb reboot loader` re-enters loader mode.
-#   2. The loader is uploaded to RAM (`upgrade_tool ul`) and the partitions
-#      are written with `upgrade_tool di ...` — no pins, no buttons.
+#   2. The loader is uploaded to RAM (`upgrade_tool ul`) and the image is
+#      written (`upgrade_tool uf update.img`) — no pins, no buttons.
 #
-# The loader (MiniLoaderAll.bin) always contains the USB download
-# function, so even a bad rootfs flash can always be re-flashed this way.
+# The loader (MiniLoaderAll.bin for lyra, download.bin for pico) always
+# contains the USB download function, so even a bad rootfs flash can
+# always be re-flashed this way.
 #
 # Needs write access to the Rockchip USB device node.  If that fails,
 # install tools/scripts/99-rockchip-usb.rules once, or run this with sudo.
@@ -38,10 +39,20 @@ esac
 
 [ -f "$IMG" ] || { echo "ERROR: update image not found: $IMG" >&2; exit 1; }
 
+# VENDOR comes from the board config (rockchip | pico).
+VENDOR=$(sed -n 's/^[[:space:]]*VENDOR[[:space:]]*[:=]\{1,2\}[[:space:]]*//p' \
+    "$SDK_ROOT/config/boards/$BOARD.mk" | head -1 || true)
+VENDOR="${VENDOR:-rockchip}"
+
 # Prefer the SDK's Linux upgrade_tool (matches the official rkflash.sh);
-# fall back to the rkbin copy.
-UT="$SDK_ROOT/vendor/rockchip/tools/linux/Linux_Upgrade_Tool/Linux_Upgrade_Tool/upgrade_tool"
-[ -x "$UT" ] || UT="$SDK_ROOT/vendor/rockchip/rkbin/tools/upgrade_tool"
+# fall back to the rkbin copy.  pico boards vendor their own upgrade_tool
+# (vendor/pico/rkbin/tools).
+if [ "$VENDOR" = "pico" ]; then
+    UT="$SDK_ROOT/vendor/pico/rkbin/tools/upgrade_tool"
+else
+    UT="$SDK_ROOT/vendor/rockchip/tools/linux/Linux_Upgrade_Tool/Linux_Upgrade_Tool/upgrade_tool"
+    [ -x "$UT" ] || UT="$SDK_ROOT/vendor/rockchip/rkbin/tools/upgrade_tool"
+fi
 [ -x "$UT" ] || { echo "ERROR: upgrade_tool not found (run \`make setup\`)" >&2; exit 1; }
 
 echo ">>> flashing $IMG"
@@ -64,6 +75,26 @@ fi
 if ! timeout 20 "$UT" td >/dev/null 2>&1; then
     echo ">>> device not accessible without root; retrying with sudo"
     exec sudo -E "$0" "$BOARD" "$MODE"
+fi
+
+if [ "$VENDOR" = "pico" ]; then
+    # pico: no parameter.txt — the partition table lives in env.img inside
+    # update.img, so the whole image is flashed in one go (official
+    # rkflash.sh flow: ul download.bin + uf update.img + rd).  The loader
+    # is the download.bin mini-loader; take it from the image's own dir
+    # (RELEASE snapshot or out/firmware).
+    LOADER="${IMG%/update.img}/download.bin"
+    [ -f "$LOADER" ] || LOADER="$SDK_ROOT/out/firmware/download.bin"
+    [ -f "$LOADER" ] || { echo "ERROR: download.bin not found" >&2; exit 1; }
+    echo ">>> loader: $LOADER"
+    timeout 30 "$UT" ul -noreset "$LOADER" || {
+        echo ">>> loader upload failed; is the device in loader/maskrom mode?" >&2
+        exit 1
+    }
+    timeout 600 "$UT" uf "$IMG"
+    timeout 30 "$UT" rd
+    echo ">>> flash done"
+    exit 0
 fi
 
 timeout 30 "$UT" ul -noreset "$SDK_ROOT/out/firmware/MiniLoaderAll.bin" || {

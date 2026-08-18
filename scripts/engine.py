@@ -150,16 +150,19 @@ def order_stages(stages: list[Stage]) -> list[Stage]:
     return result
 
 
-def _apply_config_override(stage: Stage, root: Path) -> None:
+def _apply_config_override(stage: Stage, root: Path, ctx) -> None:
     src = root / stage.config.source
-    dst = root / stage.config.dest
+    # The dest path may carry a {vendor} placeholder filled from the board's
+    # VENDOR variable (e.g. vendor/pico/u-boot/configs for pico boards).
+    vendor = ctx.board.get("VENDOR", "rockchip")
+    dst = root / stage.config.dest.format(vendor=vendor)
     if not src.is_dir():
         return
     if not dst.is_dir():
         if stage.config.dest_ok_missing:
             return
         dst.mkdir(parents=True, exist_ok=True)
-    notice(f"[{stage.name}] overriding config: {stage.config.dest}")
+    notice(f"[{stage.name}] overriding config: {dst.relative_to(root)}")
     for f in src.iterdir():
         if f.is_file():
             shutil.copy2(f, dst / f.name)
@@ -178,7 +181,7 @@ def _stage_dir(root: Path, stage: Stage) -> Path:
 def run_stage(stage: Stage, ctx, full: bool) -> None:
     notice(f"===== stage: {stage.name} — {stage.description} =====")
     if full and stage.config:
-        _apply_config_override(stage, ctx.root)
+        _apply_config_override(stage, ctx.root, ctx)
 
     if not stage.run:
         return

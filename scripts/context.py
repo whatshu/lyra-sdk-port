@@ -10,6 +10,9 @@ from util import SDK_ROOT, die, warn
 
 TOOLCHAIN_ARMHF = "gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf"
 TOOLCHAIN_ARM_EABI = "gcc-arm-none-eabi-10-2020-q4-major-x86_64-linux"
+# Official Luckfox pico (RV1106/RV1103) uclibc toolchain, used by boards
+# with TOOLCHAIN := rockchip830 in their config.
+TOOLCHAIN_ROCKCHIP830 = "arm-rockchip830-linux-uclibcgnueabihf"
 
 
 class Context:
@@ -18,7 +21,9 @@ class Context:
         self.target = target
         self.mode = mode  # "build" | "release" | "stage"
         self.board = load_board(self.root, target)
-        self.vendor = self.root / "vendor" / "rockchip"
+        # Boards select their vendor tree with VENDOR (default rockchip);
+        # pico boards live under vendor/pico/.
+        self.vendor = self.root / "vendor" / self.board.get("VENDOR", "rockchip")
 
         self.out = self.root / "out"
         self.fw = self.out / "firmware"
@@ -31,11 +36,18 @@ class Context:
                                                   str(self.root / "tools" / "toolchains")))
         self.tc_armhf = self.toolchain_root / TOOLCHAIN_ARMHF
         self.tc_arm_eabi = self.toolchain_root / TOOLCHAIN_ARM_EABI
+        self.tc_rockchip830 = self.toolchain_root / TOOLCHAIN_ROCKCHIP830
 
         self.kernel = self.vendor / "kernel"
         self.uboot = self.vendor / "u-boot"
         self.buildroot = self.vendor / "buildroot"
         self.rkbin = self.vendor / "rkbin"
+
+    def _selected_tc(self):
+        """Toolchain root selected by the board's TOOLCHAIN variable."""
+        if self.board.get("TOOLCHAIN", "armhf") == "rockchip830":
+            return self.tc_rockchip830
+        return self.tc_armhf
 
     # ---- paths -----------------------------------------------------------
     def check_vendor(self) -> None:
@@ -49,7 +61,11 @@ class Context:
                 "  Missing: " + ", ".join(missing))
 
     def check_toolchain(self) -> None:
-        gcc = self.tc_armhf / "bin" / "arm-none-linux-gnueabihf-gcc"
+        tc = self._selected_tc()
+        prefix = ("arm-rockchip830-linux-uclibcgnueabihf"
+                  if tc == self.tc_rockchip830
+                  else "arm-none-linux-gnueabihf")
+        gcc = tc / "bin" / f"{prefix}-gcc"
         if not gcc.exists():
             die(f"ARM toolchain not found at {gcc}. "
                 f"Set SDK_TOOLCHAIN or run `make docker-image`.")
@@ -57,7 +73,7 @@ class Context:
     # ---- environment -----------------------------------------------------
     def stage_env(self, stage: str, full: bool) -> dict[str, str]:
         """Environment exported to a stage's run.sh."""
-        tc = self.tc_armhf / "bin"
+        tc = self._selected_tc() / "bin"
         env = {
             "SDK_ROOT": str(self.root),
             "OUT_DIR": str(self.out),
@@ -75,12 +91,17 @@ class Context:
         return env
 
     def toolchain_env(self) -> dict[str, str]:
-        tc = self.tc_armhf / "bin"
+        tc = self._selected_tc()
+        if tc == self.tc_rockchip830:
+            prefix = str(tc / "bin" / "arm-rockchip830-linux-uclibcgnueabihf-")
+        else:
+            prefix = str(tc / "bin" / "arm-none-linux-gnueabihf-")
         return {
-            "CROSS_COMPILE": str(tc / "arm-none-linux-gnueabihf-"),
-            "TOOLCHAIN_PREFIX": str(tc / "arm-none-linux-gnueabihf-"),
+            "CROSS_COMPILE": prefix,
+            "TOOLCHAIN_PREFIX": prefix,
             "TOOLCHAIN_ARMHF": str(self.tc_armhf),
             "TOOLCHAIN_ARM_EABI": str(self.tc_arm_eabi),
+            "TC_ROCKCHIP830": str(self.tc_rockchip830),
         }
 
     def ensure_dirs(self) -> None:

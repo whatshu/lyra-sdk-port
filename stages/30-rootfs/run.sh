@@ -2,12 +2,18 @@
 # Stage: rootfs
 #
 # Builds the root filesystem with buildroot.  The buildroot defconfig
-# carries the SDK's own post-build hook (board/rockchip/common/post-build.sh)
-# which applies the device/rockchip shim + product rootfs overlay, so the
-# kernel modules and our customisations end up inside the image.
+# carries the SDK's own post-build hook (board/rockchip/common/post-build.sh
+# for lyra, board/luckfox/common/post-build.sh for pico) which applies the
+# device/rockchip shim + product rootfs overlay, so the kernel modules and
+# our customisations end up inside the image.
 #
 # On a FULL build the defconfig is regenerated; on a partial build the
 # existing buildroot .config is reused to preserve menuconfig edits.
+#
+# pico (VENDOR=pico): mirrors the official flow — buildroot only produces
+# the target dir (no fs image); rootfs.img is generated here from the
+# post-processed target with mkfs.ext4 / mkfs.ubifs+ubinize, exactly like
+# the official mkfs_ext4.sh / mkfs_ubi.sh tools.
 set -euo pipefail
 
 cd "$VENDOR_DIR/buildroot"
@@ -30,6 +36,14 @@ if [ "$FULL" = "1" ]; then
             fi
         done
     done
+
+    # pico boards use the uclibc toolchain baked at a fixed path in the
+    # container; rewrite the defconfig's external-toolchain path so it
+    # resolves even when SDK_TOOLCHAIN points elsewhere.
+    if [ "${VENDOR:-rockchip}" = "pico" ]; then
+        sed -i "s|^BR2_TOOLCHAIN_EXTERNAL_PATH=.*|BR2_TOOLCHAIN_EXTERNAL_PATH=\"${TC_ROCKCHIP830}\"|" \
+            "configs/${BUILDROOT_CFG}_defconfig"
+    fi
 
     # A/B boards use a custom ubinize config (UBI volume named `system`, which
     # u-boot's ab_update_root_partition() looks up as root=ubi0:system).  The
@@ -55,20 +69,70 @@ fi
 # $(TOPDIR)/../output/buildroot/target (which the post-rootfs publishes
 # later).  Pre-create it so that first pass doesn't fail on a missing dir;
 # the post-build pass regenerates the images from the real content.
-mkdir -p "$SDK_ROOT/vendor/rockchip/output/buildroot/target"
+mkdir -p "$VENDOR_DIR/output/buildroot/target"
 
 # BR2_DL_DIR stays at the vendor buildroot/dl (persistent cache).
 make O="$BR_OUT" -j"$NPROC"
 
-# Collect the rootfs image.
 mkdir -p "$FW_DIR"
-case "$ROOTFS_TYPE" in
-    ubi|ubifs)  IMG="rootfs.ubi" ;;
-    squashfs)   IMG="rootfs.squashfs" ;;
-    *)          IMG="rootfs.ext4" ;;
-esac
-[ -f "$BR_OUT/images/$IMG" ] || { echo "ERROR: $IMG not produced" >&2; exit 1; }
-cp -f "$BR_OUT/images/$IMG" "$FW_DIR/rootfs.img"
+if [ "${VENDOR:-rockchip}" = "pico" ]; then
+    # ---- pico: build rootfs.img from the post-processed target ------------
+    # (official flow: buildroot makes no fs image; mkfirmware does it)
+    TARGET_DIR="$BR_OUT/target"
+    [ -d "$TARGET_DIR" ] || { echo "ERROR: $TARGET_DIR missing" >&2; exit 1; }
+
+    size_to_bytes() { # 32K|64M|6G -> bytes
+        local n="${1%?}" s="${1: -1}" m=1
+        case "$s" in
+            K|k) m=1024 ;; M|m) m=$((1024*1024)) ;;
+            G|g) m=$((1024*1024*1024)) ;; *) n="$1"; m=1 ;;
+        esac
+        echo $((n * m))
+    }
+
+    case "$ROOTFS_TYPE" in
+        ubifs)
+            # spi_nand: UBI 128K blocks / 2K pages (official geometry),
+            # dynamic volume `rootfs` with autoresize.
+            LEB=$((128*1024 - 2*2048))
+            MAXLEB=$(($(size_to_bytes "${ROOTFS_SIZE:-85M}") / LEB))
+            mkfs.ubifs -x lzo -e "$LEB" -m 2048 -c "$MAXLEB" -d "$TARGET_DIR" \
+                -F -o "$OUT_DIR/rootfs.ubifs"
+            cat > "$OUT_DIR/rootfs-ubinize.cfg" <<EOF
+[ubifs]
+mode=ubi
+vol_id=0
+vol_type=dynamic
+vol_name=rootfs
+vol_alignment=1
+vol_flags=autoresize
+image=$OUT_DIR/rootfs.ubifs
+EOF
+            ubinize -o "$FW_DIR/rootfs.img" -m 2048 -p $((128*1024)) \
+                "$OUT_DIR/rootfs-ubinize.cfg"
+            ;;
+        *)
+            # emmc/sd_card: mkfs at the partition size then shrink to the
+            # content (official mkfs_ext4.sh: ^64bit,^huge_file, -m 5).
+            SIZE_M=$(( $(size_to_bytes "${ROOTFS_SIZE:-6G}") / 1024 / 1024 ))
+            mkfs.ext4 -d "$TARGET_DIR" -r 1 -N 0 -m 5 -L "" \
+                -O ^64bit,^huge_file "$FW_DIR/rootfs.img" "${SIZE_M}M"
+            resize2fs -M "$FW_DIR/rootfs.img"
+            e2fsck -fy "$FW_DIR/rootfs.img" >/dev/null 2>&1 || true
+            tune2fs -m 5 "$FW_DIR/rootfs.img" >/dev/null
+            resize2fs -M "$FW_DIR/rootfs.img"
+            ;;
+    esac
+else
+    # ---- lyra: collect the buildroot-generated image ----------------------
+    case "$ROOTFS_TYPE" in
+        ubi|ubifs)  IMG="rootfs.ubi" ;;
+        squashfs)   IMG="rootfs.squashfs" ;;
+        *)          IMG="rootfs.ext4" ;;
+    esac
+    [ -f "$BR_OUT/images/$IMG" ] || { echo "ERROR: $IMG not produced" >&2; exit 1; }
+    cp -f "$BR_OUT/images/$IMG" "$FW_DIR/rootfs.img"
+fi
 
 echo "rootfs stage done:"
 ls -lh "$FW_DIR/rootfs.img"

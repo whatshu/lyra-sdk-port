@@ -1,7 +1,7 @@
 name: uboot
-description: Build U-Boot SPL + main image (MiniLoaderAll.bin, uboot.img)
+description: Build U-Boot SPL + main image (MiniLoaderAll.bin / download.bin, uboot.img)
 needs: []
 run: run.sh
 config:
   source: product/platform/configs/uboot
-  dest: vendor/rockchip/u-boot/configs
+  dest: vendor/{vendor}/u-boot/configs

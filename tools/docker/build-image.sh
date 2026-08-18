@@ -46,6 +46,25 @@ else
     mv -f "$CTX/armhf.tar.xz.part" "$CTX/armhf.tar.xz"
 fi
 
+# --- stage the rockchip830 (pico) uclibc toolchain --------------------------
+# Local tarball only (no public upstream URL); verified against the pinned
+# sha256 before it enters the build context.
+if [ -n "${TOOLCHAIN_ROCKCHIP830_SHA256:-}" ]; then
+    TARBALL="$SDK_ROOT/cache/toolchains/arm-rockchip830-linux-uclibcgnueabihf.tar.gz"
+    [ -f "$TARBALL" ] || {
+        echo "ERROR: $TARBALL missing (put the official luckfox-pico tarball in cache/toolchains/)" >&2
+        exit 1; }
+    if [ -f "$CTX/rockchip830.tar.gz" ] && \
+            echo "$TOOLCHAIN_ROCKCHIP830_SHA256  $CTX/rockchip830.tar.gz" | \
+            sha256sum -c - >/dev/null 2>&1; then
+        echo ">>> using cached rockchip830 toolchain tarball"
+    else
+        echo "$TOOLCHAIN_ROCKCHIP830_SHA256  $TARBALL" | sha256sum -c - \
+            || { echo "ERROR: rockchip830 tarball sha256 mismatch" >&2; exit 1; }
+        cp -f "$TARBALL" "$CTX/rockchip830.tar.gz"
+    fi
+fi
+
 # --- build ------------------------------------------------------------------
 TAG="shu-sdk:build-$(git rev-parse --short HEAD 2>/dev/null || echo dev)"
 DOCKERFILE="tools/docker/Dockerfile"
@@ -54,6 +73,7 @@ DOCKERFILE="tools/docker/Dockerfile"
 echo ">>> building $TAG ($DOCKERFILE)"
 docker build \
     --build-arg "TOOLCHAIN_ARMHF_SHA256=$TOOLCHAIN_ARMHF_SHA256" \
+    --build-arg "TOOLCHAIN_ROCKCHIP830_SHA256=${TOOLCHAIN_ROCKCHIP830_SHA256:-}" \
     --build-arg "APT_MIRROR=${APT_MIRROR:-mirrors.aliyun.com}" \
     -f "$DOCKERFILE" \
     -t "$TAG" \
@@ -77,6 +97,7 @@ fi
     echo "SDK_TOOLCHAIN_FLAVOR=apt"   # apt | nix
     echo "SDK_APT_PACKAGES=$APT_PKGS"
     echo "SDK_TOOL_SHA256=armhf=$TOOLCHAIN_ARMHF_SHA256"
+    echo "SDK_TOOL_SHA256=rockchip830=$TOOLCHAIN_ROCKCHIP830_SHA256"
 } > tools/docker/container.env
 cat > tools/docker/image.info <<EOF
 IMAGE=$TAG

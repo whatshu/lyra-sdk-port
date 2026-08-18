@@ -17,6 +17,149 @@ mkdir -p "$FW"
 
 msg() { echo ">>> firmware: $*"; }
 
+# --- pico (RV1106/RV1103): env.img + update.img ------------------------------
+# The official pico flow carries the partition table inside the u-boot
+# environment (env.img) instead of a parameter.txt: the SPL idblock reads
+# blkdevparts/mtdparts + sys_bootargs from env.img and boots the FIT in
+# `boot`.  update.img = download.bin loader + the partition images, packed
+# exactly like tools/linux/Linux_Pack_Firmware/mk-update_pack.sh does.
+if [ "${VENDOR:-rockchip}" = "pico" ]; then
+    msg "pico firmware: env.img + empty oem/userdata + update.img"
+
+    for f in download.bin idblock.img uboot.img boot.img rootfs.img; do
+        [ -f "$FW/$f" ] || { echo "ERROR: missing firmware piece: $f" >&2; exit 1; }
+    done
+
+    size_to_bytes() { # 32K|64M|6G -> bytes (mkenvimage takes no suffix)
+        local n="${1%?}" s="${1: -1}" m=1
+        case "$s" in
+            K|k) m=1024 ;; M|m) m=$((1024*1024)) ;;
+            G|g) m=$((1024*1024*1024)) ;; *) n="$1"; m=1 ;;
+        esac
+        echo $((n * m))
+    }
+    # partition size for a named partition, straight out of PART_CMD
+    part_size() { # part_size oem -> 512M ("" when absent)
+        local want="$1" p name szpart sz
+        local old_ifs="$IFS"
+        IFS=',' read -ra PARTS <<< "$PART_CMD"
+        IFS="$old_ifs"
+        for p in "${PARTS[@]}"; do
+            name="${p##*(}"; name="${name%)}"
+            [ "$name" = "$want" ] || continue
+            szpart="${p%(*)}"; sz="${szpart%%@*}"
+            [ "$sz" = "-" ] && return 0
+            echo "$sz"; return 0
+        done
+        return 0
+    }
+
+    # --- env.img ------------------------------------------------------------
+    # Exactly the official build_env 3-line format (the SPL greps these
+    # strings out of the environment at boot).
+    case "$BOOT_MEDIUM" in
+        emmc)     PARTS_LINE="blkdevparts=mmcblk0:$PART_CMD" ;;
+        sd_card)  PARTS_LINE="blkdevparts=mmcblk1:$PART_CMD" ;;
+        spi_nand) PARTS_LINE="mtdparts=spi-nand0:$PART_CMD" ;;
+        spi_nor)  PARTS_LINE="mtdparts=sfc_nor:$PART_CMD" ;;
+        *) echo "ERROR: unknown BOOT_MEDIUM $BOOT_MEDIUM" >&2; exit 1 ;;
+    esac
+    ENV_CFG="$OUT_DIR/env.txt"
+    {
+        echo "$PARTS_LINE"
+        echo "sys_bootargs=${ROOTFS_ARGS} rk_dma_heap_cma=${CMA_SIZE}"
+        echo "sd_parts=mmcblk0:16K@512(env),512K@32K(idblock),4M(uboot)"
+    } > "$ENV_CFG"
+    msg "env.txt:"
+    cat "$ENV_CFG"
+    "$SDK_ROOT/tools/host/rk/mkenvimage" \
+        -s "$(size_to_bytes "${ENV_SIZE:-32K}")" -p 0x0 \
+        -o "$FW/env.img" "$ENV_CFG"
+    strings "$FW/env.img" | grep -q "sys_bootargs=" \
+        || { echo "ERROR: env.img sanity check failed" >&2; exit 1; }
+
+    # --- empty oem/userdata --------------------------------------------------
+    # 精简核心: no app/media content, but the official partition layout is
+    # kept, so oem/userdata are empty filesystems built with the official
+    # recipes (mkfs_ext4.sh / mkfs_ubi.sh).
+    EMPTY="$OUT_DIR/empty-part"
+    rm -rf "$EMPTY"; mkdir -p "$EMPTY"
+    DATA_FS_TYPE="${DATA_FS_TYPE:-$([ "$BOOT_MEDIUM" = "spi_nand" ] && echo ubifs || echo ext4)}"
+    for part in oem userdata; do
+        sz="$(part_size "$part")"
+        [ -n "$sz" ] || continue
+        case "$DATA_FS_TYPE" in
+            ubifs)
+                # spi_nand: UBI 128K blocks / 2K pages, dynamic volume named
+                # after the partition, autoresize (official geometry).
+                LEB=$((128*1024 - 2*2048))
+                MAXLEB=$(( $(size_to_bytes "$sz") / LEB ))
+                mkfs.ubifs -x lzo -e "$LEB" -m 2048 -c "$MAXLEB" \
+                    -d "$EMPTY" -F -o "$OUT_DIR/$part.ubifs"
+                cat > "$OUT_DIR/$part-ubinize.cfg" <<EOF
+[ubifs]
+mode=ubi
+vol_id=0
+vol_type=dynamic
+vol_name=$part
+vol_alignment=1
+vol_flags=autoresize
+image=$OUT_DIR/$part.ubifs
+EOF
+                ubinize -o "$FW/$part.img" -m 2048 -p $((128*1024)) \
+                    "$OUT_DIR/$part-ubinize.cfg"
+                ;;
+            *)
+                # emmc/sd_card: official mkfs_ext4.sh recipe, shrunk to the
+                # (empty) content.
+                SIZE_M=$(( $(size_to_bytes "$sz") / 1024 / 1024 ))
+                mkfs.ext4 -d "$EMPTY" -r 1 -N 0 -m 5 -L "" \
+                    -O ^64bit,^huge_file "$FW/$part.img" "${SIZE_M}M"
+                resize2fs -M "$FW/$part.img"
+                e2fsck -fy "$FW/$part.img" >/dev/null 2>&1 || true
+                tune2fs -m 5 "$FW/$part.img" >/dev/null
+                resize2fs -M "$FW/$part.img"
+                ;;
+        esac
+        msg "$part.img ($sz, $DATA_FS_TYPE): $(stat -c %s "$FW/$part.img") bytes"
+    done
+
+    # --- update.img ----------------------------------------------------------
+    # Official layout: all images + package-file flat in one dir, afptool
+    # -pack that dir, then rkImageMaker embeds the loader with the chip tag.
+    PKG="$OUT_DIR/updatepkg"
+    rm -rf "$PKG"; mkdir -p "$PKG"
+    cp -f "$FW/download.bin" "$PKG/"
+    {
+        echo "package-file	package-file"
+        echo "bootloader	download.bin"
+        old_ifs="$IFS"; IFS=',' read -ra PARTS <<< "$PART_CMD"; IFS="$old_ifs"
+        for p in "${PARTS[@]}"; do
+            name="${p##*(}"; name="${name%)}"
+            szpart="${p%(*)}"; sz="${szpart%%@*}"
+            # partitions with a `-` size exist in the layout but carry no
+            # image (official package-file skips them)
+            [ "$sz" = "-" ] && continue
+            [ -f "$FW/$name.img" ] || { echo "ERROR: $name.img missing" >&2; exit 1; }
+            cp -f "$FW/$name.img" "$PKG/"
+            echo "$name	$name.img"
+        done
+    } > "$PKG/package-file"
+    msg "package-file:"
+    cat "$PKG/package-file"
+    ( cd "$PKG" && \
+      "$VENDOR_DIR/rkbin/tools/afptool" -pack ./ update.raw.img && \
+      "$VENDOR_DIR/rkbin/tools/rkImageMaker" "-${RK_TAG:-RK1106}" \
+          download.bin update.raw.img "$FW/update.img" -os_type:androidos )
+
+    msg "compressing update.img"
+    xz -T0 -6 -k -c "$FW/update.img" > "$FW/update.img.xz"
+
+    echo "firmware stage done:"
+    ls -lh "$FW"
+    exit 0
+fi
+
 # --- parameter / partition table -------------------------------------------
 PARAM_SRC="$SDK_ROOT/config/image/$PARAMETER"
 [ -f "$PARAM_SRC" ] || { echo "ERROR: parameter file $PARAM_SRC missing" >&2; exit 1; }

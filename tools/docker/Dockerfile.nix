@@ -49,6 +49,7 @@ FROM ${UBUNTU_BASE} AS toolchains
 
 ENV DEBIAN_FRONTEND=noninteractive
 ARG TOOLCHAIN_ARMHF_SHA256
+ARG TOOLCHAIN_ROCKCHIP830_SHA256
 RUN apt-get update && apt-get install -y --no-install-recommends \
         xz-utils bzip2 ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
@@ -58,6 +59,13 @@ RUN echo "$TOOLCHAIN_ARMHF_SHA256  /tmp/armhf.tar.xz" | sha256sum -c - \
     && tar -xJf /tmp/armhf.tar.xz -C /opt/toolchains \
     && rm -f /tmp/armhf.tar.xz \
     && find /opt/toolchains -name "*.tar.*" -delete
+# Luckfox pico uclibc toolchain (flat tarball, extracted into its own dir).
+COPY tools/docker/context/toolchains/rockchip830.tar.gz /tmp/rockchip830.tar.gz
+RUN echo "$TOOLCHAIN_ROCKCHIP830_SHA256  /tmp/rockchip830.tar.gz" | sha256sum -c - \
+    && mkdir -p /opt/toolchains/arm-rockchip830-linux-uclibcgnueabihf \
+    && tar -xzf /tmp/rockchip830.tar.gz \
+        -C /opt/toolchains/arm-rockchip830-linux-uclibcgnueabihf \
+    && rm -f /tmp/rockchip830.tar.gz
 
 # ---------------------------------------------------------------------------
 # final image
